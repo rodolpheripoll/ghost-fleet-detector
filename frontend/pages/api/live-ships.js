@@ -1,15 +1,16 @@
 /**
  * GET /api/live-ships
- * Connects to aisstream.io WebSocket, collects 200 PositionReport messages,
- * and returns them as a JSON array with the same structure as the Supabase ships table.
+ * Connects to aisstream.io WebSocket, collects up to 100 PositionReport messages
+ * within 8 seconds, and returns them as JSON (same shape as Supabase ships table).
  *
- * Requires AISSTREAM_API_KEY environment variable (server-side only, not prefixed NEXT_PUBLIC_).
- * Source: https://aisstream.io — free worldwide real-time AIS WebSocket stream.
+ * Uses the native WebSocket global available in Node 22+ (Vercel Node 24.x).
+ * Requires AISSTREAM_API_KEY env var (server-side only).
  */
-import WebSocket from 'ws'
 
-const LIMIT   = 200
-const TIMEOUT = 25000   // 25 s max collection window
+export const maxDuration = 10   // Vercel Hobby max is 10s
+
+const LIMIT   = 100
+const TIMEOUT = 8000   // 8 s — safely under Vercel 10 s limit
 
 export default async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -28,24 +29,25 @@ export default async function handler(req, res) {
 
   try {
     await new Promise((resolve, reject) => {
+      // Use native WebSocket (Node 22+ / Vercel Node 24.x — no external package needed)
       const ws = new WebSocket('wss://stream.aisstream.io/v0/stream')
 
       const timer = setTimeout(() => {
-        ws.terminate()
+        ws.close()
         resolve()
       }, TIMEOUT)
 
-      ws.on('open', () => {
+      ws.onopen = () => {
         ws.send(JSON.stringify({
           APIKey:             apiKey,
           BoundingBoxes:      [[[-90, -180], [90, 180]]],
           FilterMessageTypes: ['PositionReport'],
         }))
-      })
+      }
 
-      ws.on('message', (raw) => {
+      ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(raw.toString())
+          const data = JSON.parse(event.data)
           if (data?.Message?.PositionReport) {
             const report = data.Message.PositionReport
             records.push({
@@ -63,15 +65,15 @@ export default async function handler(req, res) {
             })
             if (records.length >= LIMIT) {
               clearTimeout(timer)
-              ws.terminate()
+              ws.close()
               resolve()
             }
           }
         } catch (_) {}
-      })
+      }
 
-      ws.on('error', (err) => { clearTimeout(timer); reject(err) })
-      ws.on('close', () => { clearTimeout(timer); resolve() })
+      ws.onerror = (event) => { clearTimeout(timer); reject(new Error(event.message || 'WebSocket error')) }
+      ws.onclose = ()      => { clearTimeout(timer); resolve() }
     })
   } catch (err) {
     return res.status(500).json({ error: `WebSocket error: ${err.message}` })
