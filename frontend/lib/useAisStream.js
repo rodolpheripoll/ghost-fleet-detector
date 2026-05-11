@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 
-// API key is a free public streaming key — acceptable to include client-side
 const AISSTREAM_KEY = process.env.NEXT_PUBLIC_AISSTREAM_API_KEY || '169d5e6303ef39ddf5fe87798f6e95a939f3e863'
 
 /**
@@ -14,10 +13,10 @@ export function useAisStream(enabled) {
   const [status, setStatus] = useState('idle')
   const [error,  setError]  = useState(null)
 
-  const wsRef       = useRef(null)
-  const mapRef      = useRef({})
-  const retryRef    = useRef(null)
-  const activeRef   = useRef(false)  // tracks whether we should stay connected
+  const wsRef     = useRef(null)
+  const mapRef    = useRef({})
+  const retryRef  = useRef(null)
+  const activeRef = useRef(false)
 
   useEffect(() => {
     if (!enabled) {
@@ -34,6 +33,9 @@ export function useAisStream(enabled) {
     function connect() {
       if (!activeRef.current) return
 
+      console.log('[AisStream] API Key:', AISSTREAM_KEY ? AISSTREAM_KEY.substring(0, 10) + '...' : 'MISSING')
+      console.log('[AisStream] Attempting WebSocket connection...')
+
       setStatus(prev => prev === 'live' ? 'reconnecting' : 'connecting')
       setError(null)
 
@@ -41,16 +43,20 @@ export function useAisStream(enabled) {
       wsRef.current = ws
 
       ws.onopen = () => {
+        console.log('[AisStream] WebSocket OPENED successfully')
         if (!activeRef.current) { ws.close(); return }
-        ws.send(JSON.stringify({
+        const msg = {
           APIKey:             AISSTREAM_KEY,
           BoundingBoxes:      [[[-90, -180], [90, 180]]],
           FilterMessageTypes: ['PositionReport'],
-        }))
+        }
+        ws.send(JSON.stringify(msg))
+        console.log('[AisStream] Subscription sent:', JSON.stringify(msg).substring(0, 100))
         setStatus('live')
       }
 
       ws.onmessage = (event) => {
+        console.log('[AisStream] Message received:', event.data.substring(0, 200))
         try {
           const data = JSON.parse(event.data)
           if (data?.Message?.PositionReport) {
@@ -74,14 +80,19 @@ export function useAisStream(enabled) {
         } catch (_) {}
       }
 
-      ws.onerror = () => {
+      ws.onerror = (error) => {
+        console.error('[AisStream] WebSocket ERROR:', error)
+        console.error('[AisStream] Error type:', error.type)
         setError('Erreur de connexion aisstream.io')
       }
 
-      ws.onclose = () => {
+      ws.onclose = (event) => {
+        console.warn('[AisStream] WebSocket CLOSED')
+        console.warn('[AisStream] Close code:', event.code)
+        console.warn('[AisStream] Close reason:', event.reason)
+        console.warn('[AisStream] Was clean:', event.wasClean)
         wsRef.current = null
         if (!activeRef.current) return
-        // Auto-reconnect after 2 seconds
         retryRef.current = setTimeout(connect, 2000)
       }
     }

@@ -2,15 +2,9 @@
  * FullMap — full-screen interactive Leaflet map.
  * Must be imported with dynamic({ ssr: false }).
  *
- * Layers:
- *   - All AIS positions (gray)
- *   - AIS Disabled (orange)
- *   - Fake MMSI / spoofing (red marker)
- *   - Suspicious ships (dark red, size proportional to score)
- *   - Risk zones (colored rectangles)
- *
- * Each marker has a popup with full ship details.
- * HTML legend in the bottom-left corner.
+ * Map initialisation runs once. Ship markers and zone overlays
+ * are managed in separate effects that re-run when props change,
+ * so live WebSocket data (LIVE mode) is correctly reflected.
  */
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
@@ -29,7 +23,6 @@ const ZONE_COLORS = {
   Low:      '#22c55e',
 }
 
-// Distinct colors for ship trajectories
 const TRAJ_PALETTE = [
   '#60a5fa','#34d399','#f472b6','#fbbf24','#a78bfa',
   '#fb923c','#38bdf8','#4ade80','#f87171','#e879f9',
@@ -51,138 +44,44 @@ function popupHtml(ship) {
 }
 
 export default function FullMap({ ships = [], zones = [] }) {
-  const mapRef       = useRef(null)
-  const instanceRef  = useRef(null)
+  const mapRef        = useRef(null)   // DOM node
+  const instanceRef   = useRef(null)   // Leaflet map instance
+  const lgNormalRef   = useRef(null)
+  const lgDisabledRef = useRef(null)
+  const lgFakeRef     = useRef(null)
+  const lgSuspRef     = useRef(null)
+  const lgZonesRef    = useRef(null)
+  const lgTrajRef     = useRef(null)
+  const fittedRef     = useRef(false)  // only auto-fit bounds once
 
+  // ── Effect 1: initialise the map exactly once ────────────────────────────
   useEffect(() => {
-    if (instanceRef.current) return // already initialised
+    if (instanceRef.current) return
 
-    const map = L.map(mapRef.current, {
-      center: [20, 20],
-      zoom:   3,
-    })
+    const map = L.map(mapRef.current, { center: [20, 20], zoom: 3 })
     instanceRef.current = map
 
-    // Dark tile layer
     L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
       { attribution: '&copy; CARTO', maxZoom: 19 }
     ).addTo(map)
 
-    // ── Layer groups ──────────────────────────────────────────────────────────
-    const lgNormal     = L.layerGroup().addTo(map)
-    const lgDisabled   = L.layerGroup().addTo(map)
-    const lgFake       = L.layerGroup().addTo(map)
-    const lgSuspicious = L.layerGroup().addTo(map)
-    const lgZones      = L.layerGroup().addTo(map)
-    const lgTrajectory = L.layerGroup().addTo(map)
+    lgNormalRef.current   = L.layerGroup().addTo(map)
+    lgDisabledRef.current = L.layerGroup().addTo(map)
+    lgFakeRef.current     = L.layerGroup().addTo(map)
+    lgSuspRef.current     = L.layerGroup().addTo(map)
+    lgZonesRef.current    = L.layerGroup().addTo(map)
+    lgTrajRef.current     = L.layerGroup().addTo(map)
 
     L.control.layers(null, {
-      'Positions normales':    lgNormal,
-      'AIS desactive':         lgDisabled,
-      'MMSI FAKE (spoofing)':  lgFake,
-      'Navires suspects':      lgSuspicious,
-      'Zones a risque':        lgZones,
-      'Trajectoires':          lgTrajectory,
+      'Positions normales':    lgNormalRef.current,
+      'AIS desactive':         lgDisabledRef.current,
+      'MMSI FAKE (spoofing)':  lgFakeRef.current,
+      'Navires suspects':      lgSuspRef.current,
+      'Zones a risque':        lgZonesRef.current,
+      'Trajectoires':          lgTrajRef.current,
     }, { collapsed: false }).addTo(map)
 
-    // ── Risk zones ────────────────────────────────────────────────────────────
-    zones.forEach(zone => {
-      const { lat_min, lat_max, lon_min, lon_max, risk_level, name, description } = zone
-      if (lat_min == null) return
-      const color = ZONE_COLORS[risk_level] ?? '#94a3b8'
-      L.rectangle([[lat_min, lon_min], [lat_max, lon_max]], {
-        color, weight: 2, fillColor: color, fillOpacity: 0.15,
-      })
-        .bindPopup(`<b>${name}</b><br/><b>Risque:</b> ${risk_level}<br/>${description ?? ''}`)
-        .bindTooltip(`${name} (${risk_level})`)
-        .addTo(lgZones)
-    })
-
-    // ── Ship positions ────────────────────────────────────────────────────────
-    const trajColors = {}
-    let   colorIdx   = 0
-
-    const validShips = ships.filter(s => s.latitude != null && s.longitude != null)
-
-    // Group positions by MMSI for trajectory lines
-    const byMmsi = {}
-    validShips.forEach(ship => {
-      const m = String(ship.mmsi)
-      if (!byMmsi[m]) byMmsi[m] = []
-      byMmsi[m].push([ship.latitude, ship.longitude])
-    })
-
-    // Draw trajectory polylines
-    Object.entries(byMmsi).forEach(([mmsi, coords]) => {
-      if (coords.length < 2) return
-      if (!trajColors[mmsi]) {
-        trajColors[mmsi] = TRAJ_PALETTE[colorIdx % TRAJ_PALETTE.length]
-        colorIdx++
-      }
-      L.polyline(coords, { color: trajColors[mmsi], weight: 1.5, opacity: 0.6 })
-        .addTo(lgTrajectory)
-    })
-
-    // Draw ship markers
-    validShips.forEach(ship => {
-      const mmsi  = String(ship.mmsi)
-      const score = parseFloat(ship.score ?? 0)
-      const popup = popupHtml(ship)
-
-      if (mmsi.startsWith('FAKE-')) {
-        // Red alert marker
-        const icon = L.divIcon({
-          html: `<div style="background:#dc2626;color:white;border-radius:50%;width:20px;height:20px;
-                       display:flex;align-items:center;justify-content:center;font-size:12px;
-                       border:2px solid #fca5a5">!</div>`,
-          className: '',
-          iconSize: [20, 20],
-          iconAnchor: [10, 10],
-        })
-        L.marker([ship.latitude, ship.longitude], { icon })
-          .bindPopup(`<b>ALERTE SPOOFING</b><br/>${popup}`)
-          .bindTooltip(`FAKE MMSI: ${mmsi}`)
-          .addTo(lgFake)
-
-      } else if (!ship.ais_active) {
-        L.circleMarker([ship.latitude, ship.longitude], {
-          radius: 7, color: '#f97316', fillColor: '#f97316', fillOpacity: 0.85, weight: 1,
-        })
-          .bindPopup(`<b>AIS DESACTIVE</b><br/>${popup}`)
-          .bindTooltip(`AIS OFF: ${mmsi}`)
-          .addTo(lgDisabled)
-
-      } else if (score >= 0.3) {
-        const radius = 5 + score * 8
-        L.circleMarker([ship.latitude, ship.longitude], {
-          radius, color: '#991b1b', fillColor: '#991b1b', fillOpacity: 0.85, weight: 1,
-        })
-          .bindPopup(`<b>NAVIRE SUSPECT</b><br/>${popup}`)
-          .bindTooltip(`Suspect: ${mmsi} (${score.toFixed(2)})`)
-          .addTo(lgSuspicious)
-
-      } else {
-        L.circleMarker([ship.latitude, ship.longitude], {
-          radius: 5, color: '#6b7280', fillColor: '#6b7280', fillOpacity: 0.5, weight: 1,
-        })
-          .bindPopup(popup)
-          .bindTooltip(mmsi)
-          .addTo(lgNormal)
-      }
-    })
-
-    // Fit map bounds
-    if (validShips.length > 0) {
-      const lats = validShips.map(s => s.latitude)
-      const lons = validShips.map(s => s.longitude)
-      map.fitBounds([
-        [Math.min(...lats), Math.min(...lons)],
-        [Math.max(...lats), Math.max(...lons)],
-      ], { padding: [30, 30] })
-    }
-
-    // ── HTML Legend ───────────────────────────────────────────────────────────
     const legend = L.control({ position: 'bottomleft' })
     legend.onAdd = () => {
       const div = L.DomUtil.create('div')
@@ -206,9 +105,124 @@ export default function FullMap({ ships = [], zones = [] }) {
 
     return () => {
       map.remove()
-      instanceRef.current = null
+      instanceRef.current   = null
+      lgNormalRef.current   = null
+      lgDisabledRef.current = null
+      lgFakeRef.current     = null
+      lgSuspRef.current     = null
+      lgZonesRef.current    = null
+      lgTrajRef.current     = null
+      fittedRef.current     = false
     }
-  }, []) // Only run once on mount — ships/zones passed at build time
+  }, [])
+
+  // ── Effect 2: update zone overlays when zones prop changes ───────────────
+  useEffect(() => {
+    if (!lgZonesRef.current) return
+    lgZonesRef.current.clearLayers()
+    zones.forEach(zone => {
+      const { lat_min, lat_max, lon_min, lon_max, risk_level, name, description } = zone
+      if (lat_min == null) return
+      const color = ZONE_COLORS[risk_level] ?? '#94a3b8'
+      L.rectangle([[lat_min, lon_min], [lat_max, lon_max]], {
+        color, weight: 2, fillColor: color, fillOpacity: 0.15,
+      })
+        .bindPopup(`<b>${name}</b><br/><b>Risque:</b> ${risk_level}<br/>${description ?? ''}`)
+        .bindTooltip(`${name} (${risk_level})`)
+        .addTo(lgZonesRef.current)
+    })
+  }, [zones])
+
+  // ── Effect 3: update ship markers when ships prop changes ─────────────────
+  useEffect(() => {
+    if (!lgNormalRef.current) return
+
+    // Clear all ship layers
+    lgNormalRef.current.clearLayers()
+    lgDisabledRef.current.clearLayers()
+    lgFakeRef.current.clearLayers()
+    lgSuspRef.current.clearLayers()
+    lgTrajRef.current.clearLayers()
+
+    const validShips = ships.filter(s => s.latitude != null && s.longitude != null)
+    if (!validShips.length) return
+
+    // Group positions by MMSI for trajectory polylines
+    const byMmsi    = {}
+    const trajColors = {}
+    let   colorIdx   = 0
+
+    validShips.forEach(ship => {
+      const m = String(ship.mmsi)
+      if (!byMmsi[m]) byMmsi[m] = []
+      byMmsi[m].push([ship.latitude, ship.longitude])
+    })
+
+    Object.entries(byMmsi).forEach(([mmsi, coords]) => {
+      if (coords.length < 2) return
+      if (!trajColors[mmsi]) {
+        trajColors[mmsi] = TRAJ_PALETTE[colorIdx % TRAJ_PALETTE.length]
+        colorIdx++
+      }
+      L.polyline(coords, { color: trajColors[mmsi], weight: 1.5, opacity: 0.6 })
+        .addTo(lgTrajRef.current)
+    })
+
+    validShips.forEach(ship => {
+      const mmsi  = String(ship.mmsi)
+      const score = parseFloat(ship.score ?? 0)
+      const popup = popupHtml(ship)
+
+      if (mmsi.startsWith('FAKE-')) {
+        const icon = L.divIcon({
+          html: `<div style="background:#dc2626;color:white;border-radius:50%;width:20px;height:20px;
+                       display:flex;align-items:center;justify-content:center;font-size:12px;
+                       border:2px solid #fca5a5">!</div>`,
+          className: '', iconSize: [20, 20], iconAnchor: [10, 10],
+        })
+        L.marker([ship.latitude, ship.longitude], { icon })
+          .bindPopup(`<b>ALERTE SPOOFING</b><br/>${popup}`)
+          .bindTooltip(`FAKE MMSI: ${mmsi}`)
+          .addTo(lgFakeRef.current)
+
+      } else if (!ship.ais_active) {
+        L.circleMarker([ship.latitude, ship.longitude], {
+          radius: 7, color: '#f97316', fillColor: '#f97316', fillOpacity: 0.85, weight: 1,
+        })
+          .bindPopup(`<b>AIS DESACTIVE</b><br/>${popup}`)
+          .bindTooltip(`AIS OFF: ${mmsi}`)
+          .addTo(lgDisabledRef.current)
+
+      } else if (score >= 0.3) {
+        const radius = 5 + score * 8
+        L.circleMarker([ship.latitude, ship.longitude], {
+          radius, color: '#991b1b', fillColor: '#991b1b', fillOpacity: 0.85, weight: 1,
+        })
+          .bindPopup(`<b>NAVIRE SUSPECT</b><br/>${popup}`)
+          .bindTooltip(`Suspect: ${mmsi} (${score.toFixed(2)})`)
+          .addTo(lgSuspRef.current)
+
+      } else {
+        L.circleMarker([ship.latitude, ship.longitude], {
+          radius: 5, color: '#6b7280', fillColor: '#6b7280', fillOpacity: 0.5, weight: 1,
+        })
+          .bindPopup(popup)
+          .bindTooltip(mmsi)
+          .addTo(lgNormalRef.current)
+      }
+    })
+
+    // Auto-fit bounds only on first batch of ships (avoid jarring re-fits in LIVE mode)
+    if (!fittedRef.current && instanceRef.current) {
+      const lats = validShips.map(s => s.latitude)
+      const lons = validShips.map(s => s.longitude)
+      instanceRef.current.fitBounds([
+        [Math.min(...lats), Math.min(...lons)],
+        [Math.max(...lats), Math.max(...lons)],
+      ], { padding: [30, 30] })
+      fittedRef.current = true
+    }
+  }, [ships])
 
   return <div ref={mapRef} style={{ height: '100%', width: '100%' }} />
 }
