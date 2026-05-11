@@ -1,5 +1,6 @@
 import { useEffect, useState, useContext } from 'react'
 import { supabase, ModeContext } from '../lib/supabase'
+import { useAisStream } from '../lib/useAisStream'
 
 function ScoreBadge({ score }) {
   const s = parseFloat(score) || 0
@@ -39,36 +40,32 @@ function downloadCSV(ships) {
 
 export default function RapportPage() {
   const { mode }   = useContext(ModeContext)
-  const [ships,     setShips]     = useState([])
-  const [anomalies, setAnomalies] = useState([])
-  const [loading,   setLoading]   = useState(true)
-  const [pdfLoading, setPdfLoading] = useState(false)
-  const [error,     setError]     = useState(null)
+  const [demoShips,    setDemoShips]    = useState([])
+  const [anomalies,    setAnomalies]    = useState([])
+  const [demoLoading,  setDemoLoading]  = useState(true)
+  const [pdfLoading,   setPdfLoading]   = useState(false)
+  const [error,        setError]        = useState(null)
 
-  async function fetchFromSupabase() {
-    const [{ data: s, error: se }, { data: a, error: ae }] = await Promise.all([
-      supabase.from('ships').select('*').order('score', { ascending: false }),
-      supabase.from('anomalies').select('*'),
-    ])
-    if (se) throw se
-    if (ae) throw ae
-    setShips(s ?? [])
-    setAnomalies(a ?? [])
-  }
-
-  async function fetchLiveData() {
-    const res = await fetch('/api/live-ships')
-    if (!res.ok) throw new Error(await res.text())
-    setShips(await res.json())
-    setAnomalies([])
-  }
+  const { ships: liveShips, status: liveStatus, error: liveError } = useAisStream(mode === 'live')
 
   useEffect(() => {
-    setLoading(true)
+    if (mode !== 'demo') return
+    setDemoLoading(true)
     setError(null)
-    const fn = mode === 'demo' ? fetchFromSupabase : fetchLiveData
-    fn().catch(e => setError(e.message)).finally(() => setLoading(false))
+    Promise.all([
+      supabase.from('ships').select('*').order('score', { ascending: false }),
+      supabase.from('anomalies').select('*'),
+    ]).then(([{ data: s, error: se }, { data: a, error: ae }]) => {
+      if (se) throw se
+      if (ae) throw ae
+      setDemoShips(s ?? [])
+      setAnomalies(a ?? [])
+    }).catch(e => setError(e.message)).finally(() => setDemoLoading(false))
   }, [mode])
+
+  const ships   = mode === 'live' ? liveShips : demoShips
+  const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
+  const err     = mode === 'live' ? liveError : error
 
   const suspicious = ships.filter(s => s.score > 0.3)
   const critical   = ships.filter(s => s.score > 0.6)
@@ -108,7 +105,7 @@ export default function RapportPage() {
         <div>
           <h1 className="text-2xl font-bold text-white">Rapport — Flotte Fantome</h1>
           <p className="text-slate-400 text-sm mt-1">
-            {mode === 'live' ? 'Donnees temps reel aisstream.io' : 'Synthese de la detection CSV pipeline'}
+            {mode === 'live' ? `Donnees temps reel aisstream.io — ${ships.length} navires` : 'Synthese de la detection CSV pipeline'}
           </p>
         </div>
         <div className="flex gap-3">
@@ -125,9 +122,9 @@ export default function RapportPage() {
         </div>
       </div>
 
-      {error && (
+      {err && (
         <div className="bg-red-900/40 border border-red-700 text-red-300 rounded-lg px-4 py-3 mb-6 text-sm">
-          {error}
+          {err}
         </div>
       )}
 
@@ -178,7 +175,7 @@ export default function RapportPage() {
         </h2>
         {suspicious.length === 0 ? (
           <div className="bg-slate-800 border border-slate-700 rounded-xl p-8 text-center text-slate-400">
-            Aucun navire suspect. {mode === 'demo' ? 'Lancez le pipeline Python pour alimenter la base.' : 'Les donnees live ne contiennent pas encore de scores.'}
+            Aucun navire suspect. {mode === 'demo' ? 'Lancez le pipeline Python pour alimenter la base.' : 'Les navires live ont tous un score normal (pas de scoring ML en temps reel).'}
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-700">

@@ -1,6 +1,7 @@
 import { useEffect, useState, useContext } from 'react'
 import dynamic from 'next/dynamic'
 import { supabase, ModeContext } from '../lib/supabase'
+import { useAisStream } from '../lib/useAisStream'
 import ShipTable from '../components/ShipTable'
 
 const Plot = dynamic(() => import('react-plotly.js'), { ssr: false })
@@ -34,34 +35,29 @@ const CHART_LAYOUT = (title) => ({
 })
 
 export default function AnalysePage() {
-  const { mode }  = useContext(ModeContext)
-  const [ships,     setShips]     = useState([])
-  const [anomalies, setAnomalies] = useState([])
-  const [loading,   setLoading]   = useState(true)
-  const [filter,    setFilter]    = useState('')
-  const [typeFilter, setTypeFilter] = useState('all')
+  const { mode }         = useContext(ModeContext)
+  const [demoShips,      setDemoShips]     = useState([])
+  const [anomalies,      setAnomalies]     = useState([])
+  const [demoLoading,    setDemoLoading]   = useState(true)
+  const [filter,         setFilter]        = useState('')
+  const [typeFilter,     setTypeFilter]    = useState('all')
 
-  async function fetchFromSupabase() {
-    const [{ data: s }, { data: a }] = await Promise.all([
-      supabase.from('ships').select('*'),
-      supabase.from('anomalies').select('*').order('timestamp', { ascending: true }),
-    ])
-    setShips(s ?? [])
-    setAnomalies(a ?? [])
-  }
-
-  async function fetchLiveData() {
-    const res = await fetch('/api/live-ships')
-    if (!res.ok) throw new Error(await res.text())
-    setShips(await res.json())
-    setAnomalies([])
-  }
+  const { ships: liveShips, status: liveStatus } = useAisStream(mode === 'live')
 
   useEffect(() => {
-    setLoading(true)
-    const fn = mode === 'demo' ? fetchFromSupabase : fetchLiveData
-    fn().catch(console.error).finally(() => setLoading(false))
+    if (mode !== 'demo') return
+    setDemoLoading(true)
+    Promise.all([
+      supabase.from('ships').select('*'),
+      supabase.from('anomalies').select('*').order('timestamp', { ascending: true }),
+    ]).then(([{ data: s }, { data: a }]) => {
+      setDemoShips(s ?? [])
+      setAnomalies(a ?? [])
+    }).catch(console.error).finally(() => setDemoLoading(false))
   }, [mode])
+
+  const ships   = mode === 'live' ? liveShips : demoShips
+  const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
 
   // ── Chart data ────────────────────────────────────────────────────────────
   const riskGroups = {}

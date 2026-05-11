@@ -1,68 +1,38 @@
-import { useEffect, useState, useContext, useCallback } from 'react'
+import { useEffect, useState, useContext } from 'react'
 import dynamic from 'next/dynamic'
 import { supabase, ModeContext } from '../lib/supabase'
+import { useAisStream } from '../lib/useAisStream'
 
 const FullMap = dynamic(() => import('../components/FullMap'), { ssr: false })
 
-const LIVE_REFRESH_INTERVAL = 30000  // 30 seconds
-
 export default function CartePage() {
-  const { mode }  = useContext(ModeContext)
-  const [ships,   setShips]   = useState([])
-  const [zones,   setZones]   = useState([])
-  const [loading, setLoading] = useState(true)
-  const [search,  setSearch]  = useState('')
-  const [error,   setError]   = useState(null)
-  const [lastUpdated, setLastUpdated] = useState(null)
-  const [secondsAgo,  setSecondsAgo]  = useState(0)
+  const { mode }       = useContext(ModeContext)
+  const [demoShips,    setDemoShips]    = useState([])
+  const [zones,        setZones]        = useState([])
+  const [demoLoading,  setDemoLoading]  = useState(true)
+  const [search,       setSearch]       = useState('')
+  const [demoError,    setDemoError]    = useState(null)
 
-  async function fetchFromSupabase() {
-    const [{ data: s, error: se }, { data: z, error: ze }] = await Promise.all([
+  const { ships: liveShips, status: liveStatus, error: liveError } = useAisStream(mode === 'live')
+
+  useEffect(() => {
+    if (mode !== 'demo') return
+    setDemoLoading(true)
+    setDemoError(null)
+    Promise.all([
       supabase.from('ships').select('*'),
       supabase.from('risk_zones').select('*'),
-    ])
-    if (se) throw se
-    if (ze) throw ze
-    setShips(s ?? [])
-    setZones(z ?? [])
-  }
-
-  async function fetchLiveData() {
-    const res = await fetch('/api/live-ships')
-    if (!res.ok) throw new Error(await res.text())
-    const data = await res.json()
-    setShips(data)
-    setLastUpdated(new Date())
-  }
-
-  const refresh = useCallback(() => {
-    setError(null)
-    const fn = mode === 'demo' ? fetchFromSupabase : fetchLiveData
-    fn().catch(e => setError(e.message)).finally(() => setLoading(false))
+    ]).then(([{ data: s, error: se }, { data: z, error: ze }]) => {
+      if (se) throw se
+      if (ze) throw ze
+      setDemoShips(s ?? [])
+      setZones(z ?? [])
+    }).catch(e => setDemoError(e.message)).finally(() => setDemoLoading(false))
   }, [mode])
 
-  // Initial load + mode change
-  useEffect(() => {
-    setLoading(true)
-    setLastUpdated(null)
-    refresh()
-  }, [mode])
-
-  // Auto-refresh every 30s in LIVE mode
-  useEffect(() => {
-    if (mode !== 'live') return
-    const interval = setInterval(refresh, LIVE_REFRESH_INTERVAL)
-    return () => clearInterval(interval)
-  }, [mode, refresh])
-
-  // "Last updated X seconds ago" counter
-  useEffect(() => {
-    if (!lastUpdated) return
-    const tick = setInterval(() => {
-      setSecondsAgo(Math.floor((Date.now() - lastUpdated.getTime()) / 1000))
-    }, 1000)
-    return () => clearInterval(tick)
-  }, [lastUpdated])
+  const ships   = mode === 'live' ? liveShips : demoShips
+  const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
+  const error   = mode === 'live' ? liveError : demoError
 
   const filteredShips = search.trim()
     ? ships.filter(s => String(s.mmsi).toLowerCase().includes(search.toLowerCase()))
@@ -85,20 +55,14 @@ export default function CartePage() {
         </span>
 
         {mode === 'live' && (
-          <>
-            <button
-              onClick={refresh}
-              className="bg-emerald-800 hover:bg-emerald-700 text-emerald-300 text-xs px-3 py-1.5
-                         rounded transition-colors"
-            >
-              Actualiser
-            </button>
-            {lastUpdated && (
-              <span className="text-emerald-500 text-xs">
-                Mis a jour il y a {secondsAgo}s — actualisation auto dans {Math.max(0, 30 - secondsAgo)}s
-              </span>
-            )}
-          </>
+          <span className={`text-xs px-2 py-1 rounded-full border ${
+            liveStatus === 'live'       ? 'text-emerald-400 border-emerald-800 bg-emerald-900/30' :
+            liveStatus === 'connecting' ? 'text-amber-400 border-amber-800 bg-amber-900/30' :
+                                          'text-red-400 border-red-800 bg-red-900/30'
+          }`}>
+            {liveStatus === 'live' ? `LIVE — ${ships.length} navires` :
+             liveStatus === 'connecting' ? 'Connexion...' : liveStatus}
+          </span>
         )}
 
         {error && <span className="text-red-400 text-xs">Erreur : {error}</span>}

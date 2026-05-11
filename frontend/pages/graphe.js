@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useContext } from 'react'
 import { supabase, ModeContext } from '../lib/supabase'
+import { useAisStream } from '../lib/useAisStream'
 
 const NODE_COLORS = {
   ship:     (score) => score >= 0.6 ? '#dc2626' : score >= 0.3 ? '#d97706' : '#6b7280',
@@ -16,46 +17,43 @@ const EDGE_COLORS = {
 export default function GraphePage() {
   const { mode }   = useContext(ModeContext)
   const canvasRef  = useRef(null)
-  const [nodes,    setNodes]    = useState([])
-  const [edges,    setEdges]    = useState([])
+  const [demoNodes,   setDemoNodes]   = useState([])
+  const [demoEdges,   setDemoEdges]   = useState([])
+  const [demoLoading, setDemoLoading] = useState(true)
+  const [demoError,   setDemoError]   = useState(null)
   const [selected, setSelected] = useState(null)
-  const [loading,  setLoading]  = useState(true)
-  const [error,    setError]    = useState(null)
 
-  async function fetchFromSupabase() {
-    const [{ data: n, error: ne }, { data: e, error: ee }] = await Promise.all([
-      supabase.from('graph_nodes').select('*'),
-      supabase.from('graph_edges').select('*'),
-    ])
-    if (ne) throw ne
-    if (ee) throw ee
-    setNodes(n ?? [])
-    setEdges(e ?? [])
-  }
-
-  async function fetchLiveData() {
-    // In live mode, build a simple graph from live ship positions
-    const res = await fetch('/api/live-ships')
-    if (!res.ok) throw new Error(await res.text())
-    const ships = await res.json()
-    const syntheticNodes = ships.map(s => ({
-      id:         s.mmsi,
-      type:       'ship',
-      label:      s.mmsi,
-      score:      s.score ?? 0,
-      risk_level: s.risk_level ?? 'Normal',
-      centrality: 0,
-    }))
-    setNodes(syntheticNodes)
-    setEdges([])
-  }
+  const { ships: liveShips, status: liveStatus, error: liveError } = useAisStream(mode === 'live')
 
   useEffect(() => {
-    setLoading(true)
-    setError(null)
-    const fn = mode === 'demo' ? fetchFromSupabase : fetchLiveData
-    fn().catch(e => setError(e.message)).finally(() => setLoading(false))
+    if (mode !== 'demo') return
+    setDemoLoading(true)
+    setDemoError(null)
+    Promise.all([
+      supabase.from('graph_nodes').select('*'),
+      supabase.from('graph_edges').select('*'),
+    ]).then(([{ data: n, error: ne }, { data: e, error: ee }]) => {
+      if (ne) throw ne
+      if (ee) throw ee
+      setDemoNodes(n ?? [])
+      setDemoEdges(e ?? [])
+    }).catch(e => setDemoError(e.message)).finally(() => setDemoLoading(false))
   }, [mode])
+
+  // In live mode build synthetic nodes from WebSocket ships
+  const liveNodes = liveShips.map(s => ({
+    id:         s.mmsi,
+    type:       'ship',
+    label:      s.mmsi,
+    score:      s.score ?? 0,
+    risk_level: s.risk_level ?? 'Normal',
+    centrality: 0,
+  }))
+
+  const nodes   = mode === 'live' ? liveNodes : demoNodes
+  const edges   = mode === 'live' ? []         : demoEdges
+  const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
+  const error   = mode === 'live' ? liveError  : demoError
 
   useEffect(() => {
     if (!nodes.length || !canvasRef.current) return
