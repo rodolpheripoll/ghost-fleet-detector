@@ -56,12 +56,14 @@ export default function CartePage() {
 
         {mode === 'live' && (
           <span className={`text-xs px-2 py-1 rounded-full border ${
-            liveStatus === 'live'       ? 'text-emerald-400 border-emerald-800 bg-emerald-900/30' :
-            liveStatus === 'connecting' ? 'text-amber-400 border-amber-800 bg-amber-900/30' :
-                                          'text-red-400 border-red-800 bg-red-900/30'
+            liveStatus === 'live'          ? 'text-emerald-400 border-emerald-800 bg-emerald-900/30' :
+            liveStatus === 'reconnecting'  ? 'text-amber-400 border-amber-800 bg-amber-900/30' :
+            liveStatus === 'error'         ? 'text-red-400 border-red-800 bg-red-900/30' :
+                                             'text-amber-400 border-amber-800 bg-amber-900/30'
           }`}>
-            {liveStatus === 'live' ? `LIVE — ${ships.length} navires` :
-             liveStatus === 'connecting' ? 'Connexion...' : liveStatus}
+            {liveStatus === 'live'         ? `LIVE — ${ships.length} navires` :
+             liveStatus === 'reconnecting' ? 'Reconnexion...' :
+             liveStatus === 'error'        ? 'Erreur' : 'Connexion...'}
           </span>
         )}
 
