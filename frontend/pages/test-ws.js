@@ -31,19 +31,20 @@ export default function TestWS() {
       addLog('📤 Subscription sent: ' + JSON.stringify(msg).substring(0, 80))
     }
 
-    ws.onmessage = (e) => {
+    ws.onmessage = async (e) => {
       try {
-        const data = JSON.parse(e.data)
+        const text = typeof e.data === 'string' ? e.data : await e.data.text()
+        const data = JSON.parse(text)
         if (data?.Message?.PositionReport) {
           const r    = data.Message.PositionReport
           const mmsi = data.MetaData?.MMSI
           addLog(`🚢 Ship: MMSI=${mmsi} lat=${r.Latitude?.toFixed(4)} lon=${r.Longitude?.toFixed(4)} sog=${r.Sog}`)
           setStatus('receiving')
         } else {
-          addLog(`📩 Other message: ${e.data.substring(0, 120)}`)
+          addLog(`📩 Other message: ${text.substring(0, 120)}`)
         }
       } catch (err) {
-        addLog(`⚠️ Parse error: ${err.message} — raw: ${e.data.substring(0, 80)}`)
+        addLog(`⚠️ Parse error: ${err.message}`)
       }
     }
 
