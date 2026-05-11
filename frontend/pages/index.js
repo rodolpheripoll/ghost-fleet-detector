@@ -1,10 +1,9 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useContext } from 'react'
 import dynamic from 'next/dynamic'
-import { supabase } from '../lib/supabase'
+import { supabase, ModeContext } from '../lib/supabase'
 import KPICard from '../components/KPICard'
 import ShipTable from '../components/ShipTable'
 
-// Leaflet must be loaded client-side only (no SSR)
 const MapPreview = dynamic(() => import('../components/MapPreview'), { ssr: false })
 
 function ScoreBadge({ score }) {
@@ -17,35 +16,42 @@ function ScoreBadge({ score }) {
 }
 
 export default function Dashboard() {
+  const { mode }    = useContext(ModeContext)
   const [ships,     setShips]     = useState([])
   const [anomalies, setAnomalies] = useState([])
   const [loading,   setLoading]   = useState(true)
   const [error,     setError]     = useState(null)
 
-  useEffect(() => {
-    async function fetchData() {
-      try {
-        const [{ data: s, error: se }, { data: a, error: ae }] = await Promise.all([
-          supabase.from('ships').select('*').order('score', { ascending: false }),
-          supabase.from('anomalies').select('*'),
-        ])
-        if (se) throw se
-        if (ae) throw ae
-        setShips(s ?? [])
-        setAnomalies(a ?? [])
-      } catch (err) {
-        setError(err.message)
-      } finally {
-        setLoading(false)
-      }
-    }
-    fetchData()
-  }, [])
+  async function fetchFromSupabase() {
+    const [{ data: s, error: se }, { data: a, error: ae }] = await Promise.all([
+      supabase.from('ships').select('*').order('score', { ascending: false }),
+      supabase.from('anomalies').select('*'),
+    ])
+    if (se) throw se
+    if (ae) throw ae
+    setShips(s ?? [])
+    setAnomalies(a ?? [])
+  }
 
-  const suspicious  = ships.filter(s => s.score > 0.3).length
-  const critical    = ships.filter(s => s.score > 0.6).length
-  const ghostFleet  = ships.filter(s => s.score >= 0.8).length
-  const top10       = ships.slice(0, 10)
+  async function fetchLiveData() {
+    const res = await fetch('/api/live-ships')
+    if (!res.ok) throw new Error(await res.text())
+    const data = await res.json()
+    setShips(data)
+    setAnomalies([])
+  }
+
+  useEffect(() => {
+    setLoading(true)
+    setError(null)
+    const fn = mode === 'demo' ? fetchFromSupabase : fetchLiveData
+    fn().catch(e => setError(e.message)).finally(() => setLoading(false))
+  }, [mode])
+
+  const suspicious = ships.filter(s => s.score > 0.3).length
+  const critical   = ships.filter(s => s.score > 0.6).length
+  const ghostFleet = ships.filter(s => s.score >= 0.8).length
+  const top10      = ships.slice(0, 10)
 
   const tableColumns = [
     { key: 'mmsi',       label: 'MMSI' },
@@ -59,59 +65,36 @@ export default function Dashboard() {
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-8">
-      {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-white">
           Ghost Fleet Detection — AIS Maritime Intelligence
         </h1>
         <p className="text-slate-400 mt-1 text-sm">
-          Surveillance en temps reel de la flotte fantome via les donnees AIS
+          {mode === 'live'
+            ? 'Donnees temps reel — aisstream.io'
+            : 'Donnees statiques — pipeline CSV'}
         </p>
       </div>
 
       {error && (
         <div className="bg-red-900/40 border border-red-700 text-red-300 rounded-lg px-4 py-3 mb-6 text-sm">
-          Erreur de connexion Supabase : {error}. Verifiez vos variables d&apos;environnement.
+          {error}
         </div>
       )}
 
       {loading ? (
-        <div className="text-slate-400 animate-pulse">Chargement des donnees...</div>
+        <div className="text-slate-400 animate-pulse">
+          {mode === 'live' ? 'Connexion a aisstream.io...' : 'Chargement des donnees...'}
+        </div>
       ) : (
         <>
-          {/* KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <KPICard
-              title="Navires totaux"
-              value={ships.length}
-              icon="🚢"
-              color="text-blue-400"
-              subtitle="positions uniques MMSI"
-            />
-            <KPICard
-              title="Suspects"
-              value={suspicious}
-              icon="⚠️"
-              color="text-amber-400"
-              subtitle="score > 0.3"
-            />
-            <KPICard
-              title="Critiques"
-              value={critical}
-              icon="🔴"
-              color="text-red-400"
-              subtitle="score > 0.6"
-            />
-            <KPICard
-              title="Anomalies totales"
-              value={anomalies.length}
-              icon="🔍"
-              color="text-purple-400"
-              subtitle="regles + Isolation Forest"
-            />
+            <KPICard title="Navires totaux"  value={ships.length}  icon="🚢" color="text-blue-400"   subtitle="positions uniques MMSI" />
+            <KPICard title="Suspects"        value={suspicious}    icon="⚠️" color="text-amber-400"  subtitle="score > 0.3" />
+            <KPICard title="Critiques"       value={critical}      icon="🔴" color="text-red-400"    subtitle="score > 0.6" />
+            <KPICard title="Anomalies"       value={anomalies.length} icon="🔍" color="text-purple-400" subtitle="regles + Isolation Forest" />
           </div>
 
-          {/* Ghost Fleet highlight */}
           {ghostFleet > 0 && (
             <div className="bg-red-950 border border-red-700 rounded-xl px-5 py-4 mb-8 flex items-center gap-3">
               <span className="text-2xl">🚨</span>
@@ -119,33 +102,23 @@ export default function Dashboard() {
                 <p className="text-red-300 font-bold">
                   {ghostFleet} navire{ghostFleet > 1 ? 's' : ''} identifie{ghostFleet > 1 ? 's' : ''} comme flotte fantome (score ≥ 0.8)
                 </p>
-                <p className="text-red-400 text-sm">Action immediate requise — signaler aux autorites maritimes</p>
+                <p className="text-red-400 text-sm">Action immediate requise</p>
               </div>
             </div>
           )}
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 mb-8">
-            {/* Top 10 Table */}
             <div>
-              <h2 className="text-lg font-semibold text-white mb-3">
-                Top 10 Navires les Plus Suspects
-              </h2>
+              <h2 className="text-lg font-semibold text-white mb-3">Top 10 Navires les Plus Suspects</h2>
               <ShipTable ships={top10} columns={tableColumns} />
             </div>
-
-            {/* Map Preview */}
             <div>
-              <h2 className="text-lg font-semibold text-white mb-3">
-                Apercu Cartographique
-              </h2>
+              <h2 className="text-lg font-semibold text-white mb-3">Apercu Cartographique</h2>
               <div className="rounded-xl overflow-hidden border border-slate-700" style={{ height: 380 }}>
-                {ships.length > 0 ? (
-                  <MapPreview ships={ships} />
-                ) : (
-                  <div className="flex items-center justify-center h-full text-slate-500 bg-slate-800">
-                    Aucune position disponible
-                  </div>
-                )}
+                {ships.length > 0
+                  ? <MapPreview ships={ships} />
+                  : <div className="flex items-center justify-center h-full text-slate-500 bg-slate-800">Aucune position disponible</div>
+                }
               </div>
             </div>
           </div>

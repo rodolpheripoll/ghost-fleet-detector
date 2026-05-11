@@ -1,18 +1,26 @@
 """
 ingestion.py
 Load AIS data, suspicious behaviors, and risk zones from CSV files.
-Optionally fetch live data from AISHub API.
+Optionally fetch live data from aisstream.io via WebSocket.
 """
 
 import os
-import requests
+import json
+import asyncio
 import pandas as pd
+
+try:
+    import websockets
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    WEBSOCKETS_AVAILABLE = False
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Expected file paths (relative to project root)
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+DATA_DIR       = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
 AIS_FILE       = os.path.join(DATA_DIR, "ais_data_large.csv")
 BEHAVIORS_FILE = os.path.join(DATA_DIR, "suspicious_behaviors_large.csv")
 ZONES_FILE     = os.path.join(DATA_DIR, "risk_zones_large.csv")
@@ -24,45 +32,79 @@ def _parse_timestamps(df: pd.DataFrame, col: str) -> pd.DataFrame:
     return df
 
 
-def _fetch_aishub(api_key: str) -> pd.DataFrame | None:
+async def _fetch_aisstream(api_key: str, limit: int = 500) -> pd.DataFrame:
     """
-    Fetch live AIS positions from AISHub API.
-    Returns a DataFrame with the same columns as ais_data_large.csv, or None on failure.
-    AISHub API docs: https://www.aishub.net/api
+    Fetch live AIS data from aisstream.io via WebSocket.
+    Returns a DataFrame with the same columns as the CSV data.
+
+    aisstream.io provides a free worldwide real-time AIS WebSocket stream.
+    Source: https://aisstream.io — free tier allows up to 1000 vessels/minute.
+
+    Protocol:
+      1. Connect to wss://stream.aisstream.io/v0/stream
+      2. Send a subscribe message with APIKey + BoundingBoxes + FilterMessageTypes
+      3. Receive PositionReport messages until `limit` is reached or timeout
     """
-    url = "https://data.aishub.net/ws.php"
-    params = {
-        "username": api_key,
-        "format":   "1",       # JSON
-        "output":   "full",
-        "compress": "0",
+    if not WEBSOCKETS_AVAILABLE:
+        print("  [aisstream] websockets package not installed — skipping live data.")
+        return pd.DataFrame()
+
+    url = "wss://stream.aisstream.io/v0/stream"
+
+    subscribe_message = {
+        "APIKey": api_key,
+        "BoundingBoxes": [
+            [[-90, -180], [90, 180]]   # worldwide coverage
+        ],
+        "FilterMessageTypes": ["PositionReport"],
     }
+
+    records = []
+    print(f"  [aisstream] Connecting to {url}...")
     try:
-        resp = requests.get(url, params=params, timeout=15)
-        resp.raise_for_status()
-        payload = resp.json()
-        # AISHub returns [metadata, [vessel_list]]
-        if isinstance(payload, list) and len(payload) >= 2:
-            vessels = payload[1]
-            rows = []
-            for v in vessels:
-                rows.append({
-                    "mmsi":                str(v.get("MMSI", "")),
-                    "timestamp":           pd.Timestamp.utcnow(),
-                    "latitude":            v.get("LATITUDE"),
-                    "longitude":           v.get("LONGITUDE"),
-                    "speed":               v.get("SOG"),
-                    "course":              v.get("COG"),
-                    "status":              v.get("NAME", ""),
-                    "ais_active":          True,
-                    "navigational_status": v.get("NAVSTAT"),
-                })
-            df = pd.DataFrame(rows)
-            print(f"  [AISHub] Fetched {len(df)} live positions.")
-            return df
+        async with websockets.connect(url) as ws:
+            await ws.send(json.dumps(subscribe_message))
+            print(f"  [aisstream] Subscribed — collecting up to {limit} positions...")
+            while len(records) < limit:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=30)
+                except asyncio.TimeoutError:
+                    print("  [aisstream] Timeout waiting for messages.")
+                    break
+                data = json.loads(raw)
+                if "Message" in data and "PositionReport" in data["Message"]:
+                    report = data["Message"]["PositionReport"]
+                    records.append({
+                        "mmsi":                str(data["MetaData"]["MMSI"]),
+                        "timestamp":           data["MetaData"]["time_utc"],
+                        "latitude":            report["Latitude"],
+                        "longitude":           report["Longitude"],
+                        "speed":               report["Sog"],
+                        "course":              report["Cog"],
+                        "status":              str(report.get("NavigationalStatus", "")),
+                        "ais_active":          True,
+                        "navigational_status": report.get("NavigationalStatus", 0),
+                    })
     except Exception as exc:
-        print(f"  [AISHub] Warning: could not fetch live data — {exc}")
-    return None
+        print(f"  [aisstream] Error: {exc}")
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+    print(f"  [aisstream] Fetched {len(df)} live positions.")
+    return df
+
+
+def _run_aisstream(api_key: str, limit: int = 500) -> pd.DataFrame:
+    """Synchronous wrapper around the async aisstream fetch."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_fetch_aisstream(api_key, limit))
+    except Exception as exc:
+        print(f"  [aisstream] Could not run event loop: {exc}")
+        return pd.DataFrame()
 
 
 def load_data() -> dict:
@@ -73,40 +115,36 @@ def load_data() -> dict:
         zones     -> pd.DataFrame
 
     All timestamps are UTC-aware. All MMSI columns are cast to str.
-    If AISHUB_API_KEY is set in .env, live positions are appended to ais.
+    If AISSTREAM_API_KEY is set in .env, live positions are appended to ais.
+    Source for live data: aisstream.io free WebSocket AIS stream.
     """
     print("[ingestion] Loading CSV files...")
 
     # ── AIS data ──────────────────────────────────────────────────────────────
-    ais = pd.read_csv(
-        AIS_FILE,
-        dtype={"mmsi": str},
-        parse_dates=["timestamp"],
-    )
+    ais = pd.read_csv(AIS_FILE, dtype={"mmsi": str}, parse_dates=["timestamp"])
     ais = _parse_timestamps(ais, "timestamp")
     ais["mmsi"] = ais["mmsi"].astype(str).str.strip()
 
-    # ── Optional live AIS data from AISHub ────────────────────────────────────
-    api_key = os.getenv("AISHUB_API_KEY", "").strip()
+    # ── Optional live AIS data from aisstream.io ──────────────────────────────
+    api_key = os.getenv("AISSTREAM_API_KEY", "").strip()
     if api_key:
-        print("[ingestion] AISHUB_API_KEY found — fetching live data...")
-        live = _fetch_aishub(api_key)
-        if live is not None and not live.empty:
+        print("[ingestion] AISSTREAM_API_KEY found — fetching live data from aisstream.io...")
+        live = _run_aisstream(api_key, limit=500)
+        if not live.empty:
+            live = _parse_timestamps(live, "timestamp")
+            live["mmsi"] = live["mmsi"].astype(str).str.strip()
             ais = pd.concat([ais, live], ignore_index=True)
             print(f"  [ingestion] AIS DataFrame now has {len(ais)} rows after live merge.")
+    else:
+        print("[ingestion] No AISSTREAM_API_KEY — using CSV data only.")
 
     # ── Suspicious behaviors ──────────────────────────────────────────────────
-    behaviors = pd.read_csv(
-        BEHAVIORS_FILE,
-        dtype={"mmsi": str},
-        parse_dates=["timestamp"],
-    )
+    behaviors = pd.read_csv(BEHAVIORS_FILE, dtype={"mmsi": str}, parse_dates=["timestamp"])
     behaviors = _parse_timestamps(behaviors, "timestamp")
     behaviors["mmsi"] = behaviors["mmsi"].astype(str).str.strip()
 
     # ── Risk zones ────────────────────────────────────────────────────────────
     zones = pd.read_csv(ZONES_FILE)
-    # zone_id stays as-is; no MMSI column here
 
     print(f"[ingestion] Loaded: {len(ais)} AIS rows | "
           f"{len(behaviors)} behaviors | {len(zones)} zones")
