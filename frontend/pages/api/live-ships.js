@@ -37,6 +37,7 @@ export default async function handler(req, res) {
       }, TIMEOUT)
 
       ws.on('open', () => {
+        console.log('[live-ships] WS open, sending subscription')
         ws.send(JSON.stringify({
           APIKey:             apiKey,
           BoundingBoxes:      [[[-90, -180], [90, 180]]],
@@ -45,6 +46,7 @@ export default async function handler(req, res) {
       })
 
       ws.on('message', (raw) => {
+        if (records.length === 0) console.log('[live-ships] first message received')
         try {
           const data = JSON.parse(raw.toString())
           if (data?.Message?.PositionReport) {
@@ -71,12 +73,13 @@ export default async function handler(req, res) {
         } catch (_) {}
       })
 
-      ws.on('error', (err) => { clearTimeout(timer); reject(err) })
-      ws.on('close', () => { clearTimeout(timer); resolve() })
+      ws.on('error', (err) => { console.error('[live-ships] WS error:', err.message); clearTimeout(timer); reject(err) })
+      ws.on('close', (code, reason) => { console.log('[live-ships] WS close code:', code, 'reason:', reason?.toString()); clearTimeout(timer); resolve() })
     })
   } catch (err) {
     return res.status(500).json({ error: `WebSocket error: ${err.message}` })
   }
 
+  console.log('[live-ships] returning', records.length, 'records')
   res.status(200).json(records)
 }
