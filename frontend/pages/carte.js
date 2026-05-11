@@ -6,12 +6,12 @@ import { useAisStream } from '../lib/useAisStream'
 const FullMap = dynamic(() => import('../components/FullMap'), { ssr: false })
 
 export default function CartePage() {
-  const { mode }       = useContext(ModeContext)
-  const [demoShips,    setDemoShips]    = useState([])
-  const [zones,        setZones]        = useState([])
-  const [demoLoading,  setDemoLoading]  = useState(true)
-  const [search,       setSearch]       = useState('')
-  const [demoError,    setDemoError]    = useState(null)
+  const { mode }      = useContext(ModeContext)
+  const [demoShips,   setDemoShips]  = useState([])
+  const [zones,       setZones]      = useState([])
+  const [demoLoading, setDemoLoading] = useState(true)
+  const [search,      setSearch]     = useState('')
+  const [demoError,   setDemoError]  = useState(null)
 
   const { ships: liveShips, status: liveStatus, error: liveError } = useAisStream(mode === 'live')
 
@@ -30,9 +30,13 @@ export default function CartePage() {
     }).catch(e => setDemoError(e.message)).finally(() => setDemoLoading(false))
   }, [mode])
 
-  const ships   = mode === 'live' ? liveShips : demoShips
-  const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
-  const error   = mode === 'live' ? liveError : demoError
+  const ships = mode === 'live' ? liveShips : demoShips
+  const error = mode === 'live' ? liveError  : demoError
+
+  // In LIVE mode: show overlay only while first connecting (not on reconnects)
+  const showOverlay = mode === 'live'
+    ? (liveStatus === 'idle' || liveStatus === 'connecting') && liveShips.length === 0
+    : demoLoading
 
   const filteredShips = search.trim()
     ? ships.filter(s => String(s.mmsi).toLowerCase().includes(search.toLowerCase()))
@@ -56,28 +60,31 @@ export default function CartePage() {
 
         {mode === 'live' && (
           <span className={`text-xs px-2 py-1 rounded-full border ${
-            liveStatus === 'live'          ? 'text-emerald-400 border-emerald-800 bg-emerald-900/30' :
-            liveStatus === 'reconnecting'  ? 'text-amber-400 border-amber-800 bg-amber-900/30' :
-            liveStatus === 'error'         ? 'text-red-400 border-red-800 bg-red-900/30' :
-                                             'text-amber-400 border-amber-800 bg-amber-900/30'
+            liveStatus === 'live'         ? 'text-emerald-400 border-emerald-800 bg-emerald-900/30' :
+            liveStatus === 'reconnecting' ? 'text-amber-400 border-amber-800 bg-amber-900/30' :
+            liveStatus === 'error'        ? 'text-red-400 border-red-800 bg-red-900/30' :
+                                            'text-amber-400 border-amber-800 bg-amber-900/30'
           }`}>
             {liveStatus === 'live'         ? `LIVE — ${ships.length} navires` :
              liveStatus === 'reconnecting' ? 'Reconnexion...' :
-             liveStatus === 'error'        ? 'Erreur' : 'Connexion...'}
+             liveStatus === 'error'        ? 'Erreur connexion' : 'Connexion...'}
           </span>
         )}
 
         {error && <span className="text-red-400 text-xs">Erreur : {error}</span>}
       </div>
 
-      {/* Map */}
+      {/* Map — always mounted so Leaflet is never destroyed on reconnect */}
       <div className="flex-1 relative">
-        {loading ? (
-          <div className="flex items-center justify-center h-full text-slate-400">
-            {mode === 'live' ? 'Connexion a aisstream.io...' : 'Chargement de la carte...'}
+        <FullMap ships={filteredShips} zones={zones} />
+
+        {/* Loading overlay — shown on top, does not unmount the map */}
+        {showOverlay && (
+          <div className="absolute inset-0 flex items-center justify-center bg-[#0f172a] z-[999]">
+            <span className="text-slate-400 animate-pulse">
+              {mode === 'live' ? 'Connexion a aisstream.io...' : 'Chargement de la carte...'}
+            </span>
           </div>
-        ) : (
-          <FullMap ships={filteredShips} zones={zones} />
         )}
       </div>
     </div>
