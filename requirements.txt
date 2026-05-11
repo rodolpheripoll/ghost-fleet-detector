@@ -1,0 +1,12 @@
+pandas
+numpy
+scikit-learn
+networkx
+folium
+plotly
+fpdf2
+requests
+supabase
+python-dotenv
+geopy
+shapely

@@ -1,0 +1,24 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Leaflet CSS — required for map tiles to render correctly */
+@import 'leaflet/dist/leaflet.css';
+
+html,
+body {
+  background-color: #0f172a;
+  color: #e2e8f0;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+/* Ensure Leaflet map containers fill their parent */
+.leaflet-container {
+  background: #1e293b;
+}
+
+/* Custom scrollbar for dark theme */
+::-webkit-scrollbar        { width: 6px; height: 6px; }
+::-webkit-scrollbar-track  { background: #1e293b; }
+::-webkit-scrollbar-thumb  { background: #475569; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #64748b; }
