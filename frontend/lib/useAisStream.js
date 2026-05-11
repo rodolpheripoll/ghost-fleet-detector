@@ -55,10 +55,12 @@ export function useAisStream(enabled) {
         setStatus('live')
       }
 
-      ws.onmessage = (event) => {
-        console.log('[AisStream] Message received:', event.data.substring(0, 200))
+      ws.onmessage = async (event) => {
+        // aisstream.io sends binary frames in browsers — convert Blob to text first
+        const text = typeof event.data === 'string' ? event.data : await event.data.text()
+        console.log('[AisStream] Message received:', text.substring(0, 200))
         try {
-          const data = JSON.parse(event.data)
+          const data = JSON.parse(text)
           if (data?.Message?.PositionReport) {
             const report = data.Message.PositionReport
             const mmsi   = String(data.MetaData.MMSI)
