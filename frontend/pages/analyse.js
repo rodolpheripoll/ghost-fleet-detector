@@ -1,437 +1,551 @@
-import { useEffect, useState, useContext } from 'react'
+import { useEffect, useState, useContext, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { supabase, ModeContext } from '../lib/supabase'
+import ShipTable from '../components/ShipTable'
 
-const Plot = dynamic(() => import('react-plotly.js'), {
-  ssr: false,
-  loading: () => (
-    <div className="animate-pulse rounded-lg" style={{ height: 260, background: 'var(--line-2)' }} />
-  ),
+const Plot = dynamic(() => import('react-plotly.js'), { ssr: false })
+
+const RISK_PALETTE = {
+  'Ghost Fleet': '#7c3aed',
+  'Critical':    '#dc2626',
+  'Suspect':     '#d97706',
+  'Normal':      '#16a34a',
+}
+const RISK_ORDER = ['Normal', 'Suspect', 'Critical', 'Ghost Fleet']
+
+const CHART_LAYOUT = (title) => ({
+  title:         { text: title, font: { color: '#1e3a5f', size: 13, family: 'Manrope' } },
+  paper_bgcolor: '#ffffff',
+  plot_bgcolor:  '#f6f8fb',
+  font:          { color: '#64748b', size: 11, family: 'Manrope' },
+  xaxis:         { gridcolor: '#eef2f7', zerolinecolor: '#eef2f7', tickfont: { color: '#64748b', size: 11 } },
+  yaxis:         { gridcolor: '#eef2f7', zerolinecolor: '#eef2f7', tickfont: { color: '#64748b', size: 11 } },
+  margin:        { t: 40, b: 40, l: 60, r: 20 },
+  legend:        { bgcolor: '#ffffff', bordercolor: '#e5ebf2', borderwidth: 1 },
+  autosize:      true,
 })
+const CONF = { responsive: true, displayModeBar: false }
 
-const PL = {
-  paper_bgcolor: 'transparent',
-  plot_bgcolor: '#fafcfe',
-  font: { family: 'Manrope, sans-serif', size: 10.5, color: '#64748b' },
-  margin: { t: 8, r: 12, b: 40, l: 50 },
-  hoverlabel: { font: { family: 'Manrope, sans-serif' } },
-}
-const CFG = { displayModeBar: false, responsive: true }
+const DAYS = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam']
+const ANOM_TYPES = ['AIS Disabled', 'MMSI Spoofing', 'Speed Anomaly',
+                    'Fake Position', 'Course Anomaly', 'Zone Crossing', 'Zone Violation']
 
-const RISK_COLORS = { Normal: '#22c55e', Suspect: '#f97316', Critical: '#ef4444', 'Ghost Fleet': '#7f1d1d' }
-const RISK_LEVELS = ['Ghost Fleet', 'Critical', 'Suspect', 'Normal']
+export default function AnalysePage() {
+  const { mode } = useContext(ModeContext)
+  const [tab,        setTab]       = useState('demo')
+  const [demoShips,  setDemoShips]  = useState([])
+  const [graphShips, setGraphShips] = useState([])
+  const [anomalies,  setAnomalies]  = useState([])
+  const [zoneStats,  setZoneStats]  = useState([])
+  const [loading,    setLoading]    = useState(true)
+  const [filter,     setFilter]     = useState('')
+  const [typeFilter, setTypeFilter] = useState('all')
 
-const WEIGHTS = {
-  'AIS Disabled': 0.30, 'MMSI Spoofing': 0.25, 'Speed Anomaly': 0.20,
-  'Name Change': 0.18, 'Fake Position': 0.15, 'ML Anomaly': 0.12,
-  'Zone Crossing': 0.10, 'Zone Violation': 0.10, 'Course Anomaly': 0.08,
-}
+  useEffect(() => { setTab(mode) }, [mode])
 
-function ChartCard({ title, subtitle, badge, children }) {
-  return (
-    <div className="card p-5">
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <div className="text-[11px] uppercase font-semibold tracking-wide" style={{ color: 'var(--muted)' }}>{subtitle}</div>
-          <h3 className="text-[15px] font-bold tracking-tight mt-0.5">{title}</h3>
-        </div>
-        {badge && <div className="mono text-[11px]" style={{ color: 'var(--muted)' }}>{badge}</div>}
-      </div>
-      {children}
-    </div>
+  useEffect(() => {
+    setLoading(true)
+    Promise.all([
+      supabase.from('ships').select('*'),
+      supabase.from('ships_graph').select('*'),
+      supabase.from('anomalies').select('*').order('timestamp', { ascending: true }),
+      supabase.from('zone_stats').select('*').order('suspicious_behavior_count', { ascending: false }),
+    ]).then(([{ data: s }, { data: g }, { data: a }, { data: z }]) => {
+      setDemoShips(s ?? [])
+      setGraphShips(g ?? [])
+      setAnomalies(a ?? [])
+      setZoneStats(z ?? [])
+    }).catch(console.error).finally(() => setLoading(false))
+  }, [])
+
+  // ── DEMO charts ─────────────────────────────────────────────────────────────
+  const riskGroups = useMemo(() => {
+    const g = {}
+    demoShips.forEach(s => {
+      const rl = s.risk_level ?? 'Normal'
+      if (!g[rl]) g[rl] = { mmsi: [], speed: [], score: [] }
+      g[rl].mmsi.push(s.mmsi); g[rl].speed.push(s.speed ?? 0); g[rl].score.push(s.score ?? 0)
+    })
+    return g
+  }, [demoShips])
+
+  const scatterTraces = Object.entries(riskGroups).map(([risk, d]) => ({
+    type: 'scatter', mode: 'markers', name: risk,
+    x: d.speed, y: d.score, text: d.mmsi,
+    hovertemplate: '<b>%{text}</b><br>Vitesse: %{x} kn<br>Score: %{y:.2f}<extra></extra>',
+    marker: { color: RISK_PALETTE[risk] ?? '#6b7280', size: 7, opacity: 0.85 },
+  }))
+
+  const typeCounts = useMemo(() => {
+    const c = {}
+    anomalies.forEach(a => { c[a.type] = (c[a.type] ?? 0) + 1 })
+    return c
+  }, [anomalies])
+
+  const barTrace = [{
+    type: 'bar', x: Object.keys(typeCounts), y: Object.values(typeCounts),
+    marker: { color: '#3b82f6' },
+    hovertemplate: '<b>%{x}</b><br>%{y}<extra></extra>',
+  }]
+
+  // Timeline : anomalies by type per month
+  const timelineTraces = useMemo(() => {
+    const byTypeMonth = {}
+    anomalies.forEach(a => {
+      if (!a.timestamp) return
+      const month = a.timestamp.slice(0, 7)
+      const t = a.type
+      if (!byTypeMonth[t]) byTypeMonth[t] = {}
+      byTypeMonth[t][month] = (byTypeMonth[t][month] ?? 0) + 1
+    })
+    const allMonths = [...new Set(anomalies.map(a => a.timestamp?.slice(0, 7)).filter(Boolean))].sort()
+    return ANOM_TYPES.filter(t => byTypeMonth[t]).map(t => ({
+      type: 'scatter', mode: 'lines+markers', name: t,
+      x: allMonths,
+      y: allMonths.map(m => byTypeMonth[t]?.[m] ?? 0),
+      line: { width: 2 },
+    }))
+  }, [anomalies])
+
+  // Temporal heatmap : AIS off by hour × day
+  const heatmapData = useMemo(() => {
+    const matrix = Array.from({ length: 7 }, () => Array(24).fill(0))
+    anomalies.filter(a => a.type === 'AIS Disabled' && a.timestamp).forEach(a => {
+      const d = new Date(a.timestamp)
+      matrix[d.getDay()][d.getHours()]++
+    })
+    return matrix
+  }, [anomalies])
+
+  const heatmapTrace = [{
+    type: 'heatmap',
+    x: Array.from({ length: 24 }, (_, i) => `${i}h`),
+    y: DAYS,
+    z: heatmapData,
+    colorscale: 'YlOrRd',
+    hovertemplate: '%{y} %{x}<br>%{z} coupures AIS<extra></extra>',
+  }]
+
+  // Radar chart : Ghost Fleet vs Normal anomaly profile
+  const radarData = useMemo(() => {
+    const anomByMmsi = {}
+    anomalies.forEach(a => {
+      if (!anomByMmsi[a.mmsi]) anomByMmsi[a.mmsi] = new Set()
+      anomByMmsi[a.mmsi].add(a.type)
+    })
+    const groups = { 'Ghost Fleet': [], Normal: [] }
+    demoShips.forEach(s => {
+      const rl = s.risk_level ?? 'Normal'
+      if (rl === 'Ghost Fleet') groups['Ghost Fleet'].push(s.mmsi)
+      else if (rl === 'Normal') groups.Normal.push(s.mmsi)
+    })
+    const axes = ['AIS Disabled', 'MMSI Spoofing', 'Speed Anomaly', 'Fake Position', 'Zone Crossing']
+    return ['Ghost Fleet', 'Normal'].map(grp => {
+      const ships = groups[grp]
+      if (!ships.length) return null
+      const vals = axes.map(ax =>
+        Math.round(100 * ships.filter(m => anomByMmsi[m]?.has(ax)).length / ships.length)
+      )
+      return {
+        type: 'scatterpolar', name: grp, fill: 'toself',
+        r: [...vals, vals[0]], theta: [...axes, axes[0]],
+        line: { color: RISK_PALETTE[grp] },
+        marker: { color: RISK_PALETTE[grp] },
+        hovertemplate: '<b>%{theta}</b><br>%{r}% des navires<extra></extra>',
+      }
+    }).filter(Boolean)
+  }, [demoShips, anomalies])
+
+  // Top 10 pavillons
+  const flagTrace = useMemo(() => {
+    const flagCounts = {}
+    demoShips.filter(s => s.flag && (s.score ?? 0) > 0.3).forEach(s => {
+      flagCounts[s.flag] = (flagCounts[s.flag] ?? 0) + 1
+    })
+    const sorted = Object.entries(flagCounts).sort((a, b) => b[1] - a[1]).slice(0, 10)
+    return [{
+      type: 'bar', orientation: 'h',
+      y: sorted.map(([f]) => f).reverse(),
+      x: sorted.map(([, n]) => n).reverse(),
+      marker: { color: '#dc2626', opacity: 0.8 },
+      hovertemplate: '<b>%{y}</b><br>%{x} navires suspects<extra></extra>',
+    }]
+  }, [demoShips])
+
+  // Co-occurrence matrix
+  const coOccurrenceData = useMemo(() => {
+    const anomByMmsi = {}
+    anomalies.forEach(a => {
+      if (!anomByMmsi[a.mmsi]) anomByMmsi[a.mmsi] = new Set()
+      anomByMmsi[a.mmsi].add(a.type)
+    })
+    const types = ANOM_TYPES.filter(t => typeCounts[t])
+    const matrix = types.map(ti =>
+      types.map(tj => {
+        if (ti === tj) return 0
+        return Object.values(anomByMmsi).filter(s => s.has(ti) && s.has(tj)).length
+      })
+    )
+    return [{ type: 'heatmap', x: types, y: types, z: matrix,
+      colorscale: 'Blues',
+      hovertemplate: '%{y} ∩ %{x}<br>%{z} navires<extra></extra>' }]
+  }, [anomalies, typeCounts])
+
+  const top10demo = [...demoShips].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10)
+  const hbarTrace = [{
+    type: 'bar', orientation: 'h',
+    y: top10demo.map(s => s.mmsi), x: top10demo.map(s => s.score ?? 0),
+    marker: { color: top10demo.map(s => RISK_PALETTE[s.risk_level] ?? '#6b7280') },
+    hovertemplate: '<b>%{y}</b><br>Score: %{x:.3f}<extra></extra>',
+  }]
+
+  // ── GRAPH charts ─────────────────────────────────────────────────────────────
+
+  // Sankey : DEMO → GRAPH reclassification
+  const sankeyData = useMemo(() => {
+    const demoRisk = {}
+    demoShips.forEach(s => { demoRisk[s.mmsi] = s.risk_level ?? 'Normal' })
+
+    const flows = {}
+    graphShips.forEach(s => {
+      const dr = demoRisk[s.mmsi] ?? 'Normal'
+      const gr = s.risk_level ?? 'Normal'
+      const key = `${dr}→${gr}`
+      flows[key] = (flows[key] ?? 0) + 1
+    })
+
+    // Nodes: 0-3 = DEMO levels, 4-7 = GRAPH levels
+    const labels = [
+      'Normal (DEMO)', 'Suspect (DEMO)', 'Critical (DEMO)', 'Ghost Fleet (DEMO)',
+      'Normal (GRAPH)', 'Suspect (GRAPH)', 'Critical (GRAPH)', 'Ghost Fleet (GRAPH)',
+    ]
+    const colors = [
+      '#16a34a88','#d9770688','#dc262688','#7c3aed88',
+      '#16a34a','#d97706','#dc2626','#7c3aed',
+    ]
+    const nodeIdx = { Normal: 0, Suspect: 1, Critical: 2, 'Ghost Fleet': 3 }
+
+    const sources = [], targets = [], values = []
+    Object.entries(flows).forEach(([key, count]) => {
+      const [dr, gr] = key.split('→')
+      if (nodeIdx[dr] !== undefined && nodeIdx[gr] !== undefined) {
+        sources.push(nodeIdx[dr])
+        targets.push(nodeIdx[gr] + 4)
+        values.push(count)
+      }
+    })
+
+    return [{ type: 'sankey',
+      node: { pad: 20, thickness: 24, label: labels, color: colors,
+        line: { color: '#e2e8f0', width: 0.5 } },
+      link: { source: sources, target: targets, value: values,
+        color: sources.map(s => colors[s].replace('88', '44')) },
+    }]
+  }, [demoShips, graphShips])
+
+  // DEMO vs GRAPH scatter
+  const gRiskGroups = useMemo(() => {
+    const g = {}
+    graphShips.forEach(s => {
+      const rl = s.risk_level ?? 'Normal'
+      if (!g[rl]) g[rl] = { mmsi: [], demo: [], graph: [] }
+      g[rl].mmsi.push(s.mmsi)
+      g[rl].demo.push(s.demo_score ?? s.score ?? 0)
+      g[rl].graph.push(s.score ?? 0)
+    })
+    return g
+  }, [graphShips])
+
+  const demoVsGraphTraces = [
+    { type: 'scatter', mode: 'lines', name: 'Référence (y=x)',
+      x: [0, 1], y: [0, 1], line: { color: '#94a3b8', dash: 'dash', width: 1.5 }, hoverinfo: 'skip' },
+    ...Object.entries(gRiskGroups).map(([risk, d]) => ({
+      type: 'scatter', mode: 'markers', name: risk,
+      x: d.demo, y: d.graph, text: d.mmsi,
+      hovertemplate: '<b>%{text}</b><br>DEMO: %{x:.3f}<br>GRAPH: %{y:.3f}<extra></extra>',
+      marker: { color: RISK_PALETTE[risk] ?? '#6b7280', size: 6, opacity: 0.8 },
+    })),
+  ]
+
+  // Group discount distribution
+  const discountCounts = useMemo(() => {
+    const c = {}
+    graphShips.forEach(s => {
+      const d = ((s.group_discount ?? 0) * 100).toFixed(0) + '%'
+      c[d] = (c[d] ?? 0) + 1
+    })
+    return c
+  }, [graphShips])
+  const discountOrder = ['0%','5%','10%','20%','30%','40%','50%']
+  const discountBarTrace = [{
+    type: 'bar',
+    x: discountOrder.filter(k => discountCounts[k]),
+    y: discountOrder.filter(k => discountCounts[k]).map(k => discountCounts[k]),
+    marker: { color: '#7c3aed', opacity: 0.85 },
+    hovertemplate: 'Réduction %{x}<br>%{y} navires<extra></extra>',
+  }]
+
+  // Score delta box
+  const deltaBins = useMemo(() => {
+    const b = {}
+    graphShips.forEach(s => {
+      const rl = s.risk_level ?? 'Normal'
+      if (!b[rl]) b[rl] = []
+      b[rl].push((s.demo_score ?? s.score ?? 0) - (s.score ?? 0))
+    })
+    return b
+  }, [graphShips])
+  const deltaBoxTraces = Object.entries(deltaBins).filter(([, v]) => v.length).map(([risk, vals]) => ({
+    type: 'box', name: risk, y: vals,
+    marker: { color: RISK_PALETTE[risk] ?? '#6b7280' },
+    hovertemplate: '<b>' + risk + '</b><br>Réduction: %{y:.3f}<extra></extra>',
+  }))
+
+  const anomTypes  = ['all', ...new Set(anomalies.map(a => a.type))]
+  const filteredAnom = anomalies.filter(a => {
+    const matchMmsi = !filter || String(a.mmsi).toLowerCase().includes(filter.toLowerCase())
+    const matchType = typeFilter === 'all' || a.type === typeFilter
+    return matchMmsi && matchType
+  })
+
+  const anomColumns = [
+    { key: 'mmsi',        label: 'MMSI' },
+    { key: 'type',        label: 'Type' },
+    { key: 'description', label: 'Description', render: v => <span className="text-xs text-[#64748b]">{v}</span> },
+    { key: 'confidence',  label: 'Confiance',   render: v => <span className={`text-xs font-bold ${parseFloat(v) >= 0.85 ? 'text-[#dc2626]' : 'text-[#d97706]'}`}>{(parseFloat(v ?? 0) * 100).toFixed(0)}%</span> },
+    { key: 'detected_by', label: 'Méthode',     render: v => <span className={`px-2 py-0.5 rounded text-xs ${v === 'isolation_forest' ? 'bg-[#ede9fe] text-[#7c3aed]' : v === 'both' ? 'bg-[#fee2e2] text-[#dc2626]' : 'bg-[#dbeafe] text-[#1d4ed8]'}`}>{v}</span> },
+    { key: 'timestamp',   label: 'Timestamp',   render: v => v ? new Date(v).toLocaleString('fr-FR') : 'N/A' },
+  ]
+
+  if (loading) return (
+    <main className="max-w-7xl mx-auto px-4 py-8 text-[#64748b] animate-pulse">
+      Chargement des analyses...
+    </main>
   )
-}
-
-export default function Analyse() {
-  const { mode }              = useContext(ModeContext)
-  const [ships,   setShips]   = useState([])
-  const [anomalies, setAnom]  = useState([])
-  const [loading, setLoad]    = useState(true)
-  const [tab, setTab]         = useState('demo')
-  const [graphShips, setGS]   = useState([])
-  const [graphLoad, setGL]    = useState(false)
-
-  useEffect(() => {
-    setLoad(true)
-    const table = mode === 'graph' ? 'ships_graph' : 'ships'
-    const sq = mode === 'graph'
-      ? supabase.from(table).select('*').order('score', { ascending: false })
-      : supabase.from(table).select('*').neq('flag', 'Unknown').order('score', { ascending: false })
-    Promise.all([sq, supabase.from('anomalies').select('*')])
-      .then(([{ data: s }, { data: a }]) => { setShips(s ?? []); setAnom(a ?? []) })
-      .finally(() => setLoad(false))
-  }, [mode])
-
-  useEffect(() => {
-    if (tab === 'graph' && graphShips.length === 0) {
-      setGL(true)
-      supabase.from('ships_graph').select('*').order('score', { ascending: false })
-        .then(({ data }) => setGS(data ?? []))
-        .finally(() => setGL(false))
-    }
-  }, [tab])
-
-  // ── DEMO chart 1: Pie — risk level distribution ────────────────────────────
-  const riskCounts = RISK_LEVELS.map(l => ships.filter(s => (s.risk_level || 'Normal') === l).length)
-  const pieData = [{
-    type: 'pie',
-    labels: RISK_LEVELS,
-    values: riskCounts,
-    marker: { colors: RISK_LEVELS.map(l => RISK_COLORS[l]) },
-    textinfo: 'label+percent',
-    hovertemplate: '<b>%{label}</b><br>%{value} navires<br>%{percent}<extra></extra>',
-    hole: 0.35,
-  }]
-
-  // ── DEMO chart 2: Horizontal bar — anomaly types by count ──────────────────
-  const typeCountMap = {}
-  anomalies.forEach(a => {
-    if (!a.type) return
-    typeCountMap[a.type] = (typeCountMap[a.type] || 0) + 1
-  })
-  const anomTypesSorted = Object.entries(typeCountMap).sort((a, b) => b[1] - a[1])
-  const anomBarData = [{
-    type: 'bar',
-    orientation: 'h',
-    y: anomTypesSorted.map(([t]) => t),
-    x: anomTypesSorted.map(([, c]) => c),
-    marker: {
-      color: anomTypesSorted.map(([t]) => (WEIGHTS[t] || 0) >= 0.25 ? '#7f1d1d' : '#f97316'),
-    },
-    hovertemplate: '<b>%{y}</b><br>%{x} détections<extra></extra>',
-  }]
-
-  // ── DEMO chart 3: Grouped bar — severity per anomaly type ──────────────────
-  const severities = ['Critical', 'High', 'Medium', 'Low']
-  const sevColors  = { Critical: '#7f1d1d', High: '#ef4444', Medium: '#f97316', Low: '#eab308' }
-  const topTypes   = anomTypesSorted.slice(0, 6).map(([t]) => t)
-  const sevMap = {}
-  anomalies.forEach(a => {
-    if (!a.type || !a.severity) return
-    if (!sevMap[a.type]) sevMap[a.type] = {}
-    sevMap[a.type][a.severity] = (sevMap[a.type][a.severity] || 0) + 1
-  })
-  const sevTraces = severities.map(sev => ({
-    type: 'bar',
-    name: sev,
-    x: topTypes,
-    y: topTypes.map(t => sevMap[t]?.[sev] || 0),
-    marker: { color: sevColors[sev] },
-  }))
-
-  // ── DEMO chart 4: Bar — average score by ship type ─────────────────────────
-  const typeScoreMap = {}
-  ships.forEach(s => {
-    const t = (s.ship_type || s.type || 'Unknown').split(' ')[0]
-    if (!typeScoreMap[t]) typeScoreMap[t] = []
-    typeScoreMap[t].push(s.score ?? 0)
-  })
-  const typeAvgScores = Object.entries(typeScoreMap)
-    .map(([t, scores]) => ({ type: t, avg: scores.reduce((a, b) => a + b, 0) / scores.length }))
-    .sort((a, b) => b.avg - a.avg)
-    .slice(0, 10)
-  const typeScoreBar = [{
-    type: 'bar',
-    x: typeAvgScores.map(d => d.type),
-    y: typeAvgScores.map(d => +d.avg.toFixed(4)),
-    marker: {
-      color: typeAvgScores.map(d =>
-        d.avg >= 0.68 ? '#7f1d1d' : d.avg >= 0.44 ? '#ef4444' : d.avg >= 0.19 ? '#f97316' : '#22c55e'
-      ),
-    },
-    hovertemplate: '<b>%{x}</b><br>Score moyen: %{y:.3f}<extra></extra>',
-  }]
-
-  // ── GRAPH charts ───────────────────────────────────────────────────────────
-  const gByRisk = {}
-  RISK_LEVELS.forEach(l => { gByRisk[l] = graphShips.filter(s => s.risk_level === l) })
-
-  // GRAPH chart 1: Scatter — degree vs score
-  const degreeScatterTraces = RISK_LEVELS.map(l => ({
-    x: gByRisk[l].map(s => s.graph_degree ?? 0),
-    y: gByRisk[l].map(s => +(s.score ?? 0).toFixed(4)),
-    mode: 'markers', name: l, type: 'scatter',
-    marker: { color: RISK_COLORS[l], size: 6, opacity: 0.7 },
-    hovertemplate: `<b>${l}</b><br>Degré: %{x}<br>Score: %{y:.3f}<extra></extra>`,
-  }))
-
-  // GRAPH chart 2: Bar — 4 dimensions averages
-  const DIMS       = ['isolation_score', 'behavior_score', 'route_sim_score', 'zone_score']
-  const DIM_LABELS = ['Isolation (35%)', 'Comportement (40%)', 'Route (10%)', 'Zone (15%)']
-  const dimTraces  = RISK_LEVELS.map(l => ({
-    x: DIM_LABELS,
-    y: DIMS.map(d => {
-      const vals = gByRisk[l].map(s => s[d] ?? 0)
-      return vals.length ? +(vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(4) : 0
-    }),
-    name: l, type: 'bar', marker: { color: RISK_COLORS[l] },
-  }))
-
-  const normal  = ships.filter(s => s.risk_level === 'Normal').length
-  const suspect = ships.filter(s => s.risk_level === 'Suspect').length
-  const critical= ships.filter(s => s.risk_level === 'Critical').length
-  const ghost   = ships.filter(s => s.risk_level === 'Ghost Fleet').length
-  const legendH = { orientation: 'h', y: -0.28, font: { size: 10 } }
 
   return (
-    <main className="px-8 py-7">
-      {/* Page header */}
-      <section className="flex items-end justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2 text-[12px] mb-2" style={{ color: 'var(--muted)' }}>
-            <span>Renseignement maritime</span>
-            <span style={{ color: 'var(--line)' }}>/</span>
-            <span className="font-semibold" style={{ color: 'var(--ink-2)' }}>Analyse ML</span>
-          </div>
-          <h1 className="text-[26px] font-bold tracking-tight" style={{ color: 'var(--ink)' }}>
-            Analyse des scores et anomalies
-          </h1>
-          <div className="text-[13.5px] mt-1" style={{ color: 'var(--muted)' }}>
-            Visualisation des sorties du moteur de détection — {ships.length.toLocaleString('fr-FR')} navires analysés.
-          </div>
-        </div>
-        <div className="flex items-center gap-2.5">
-          <button className="text-[13px] font-semibold px-3.5 py-2 rounded-lg border"
-            style={{ borderColor: 'var(--line)', background: 'var(--paper)' }}>Exporter PNG</button>
-          <button className="text-[13px] font-semibold px-3.5 py-2 rounded-lg text-white"
-            style={{ background: 'var(--navy)' }}>Recalculer</button>
-        </div>
-      </section>
-
-      {/* Tabs */}
+    <main className="max-w-7xl mx-auto px-8 py-8">
       <div className="flex items-center justify-between mb-6">
-        <div className="tabbar">
-          <button className={`tab${tab === 'demo' ? ' active' : ''}`} onClick={() => setTab('demo')}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg>
+        <h1 className="text-[26px] font-bold text-[#1e3a5f]">Analyse</h1>
+        <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1">
+          <button onClick={() => setTab('demo')}
+            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${
+              tab === 'demo' ? 'bg-[#0ea5e9] text-white shadow-sm' : 'text-[#64748b] hover:text-[#0f172a]'}`}>
             Analyse DEMO
-            <span className="badge">Isolation Forest</span>
           </button>
-          <button className={`tab${tab === 'graph' ? ' active' : ''}`} onClick={() => setTab('graph')}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/>
-              <circle cx="18" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/>
-              <path d="M8 6h8M6 8v8M18 8v8M8 18h8"/>
-            </svg>
+          <button onClick={() => setTab('graph')}
+            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${
+              tab === 'graph' ? 'bg-[#7c3aed] text-white shadow-sm' : 'text-[#64748b] hover:text-[#0f172a]'}`}>
             Analyse GRAPH
-            <span className="badge">Réseau de navires</span>
           </button>
-        </div>
-        <div className="flex items-center gap-3 text-[12px]" style={{ color: 'var(--muted)' }}>
-          <span className="flex items-center gap-1.5">
-            <span className="dot" style={{ background: '#22c55e', boxShadow: '0 0 0 3px rgba(34,197,94,.18)' }} />
-            Modèle entraîné · v2.4.1
-          </span>
-          <span>·</span>
-          <span className="mono">AUC 0.94 · F1 0.89</span>
         </div>
       </div>
 
-      {loading ? (
-        <div className="text-[13px] animate-pulse" style={{ color: 'var(--muted)' }}>Chargement…</div>
-      ) : (
+      {/* ── DEMO TAB ── */}
+      {tab === 'demo' && (
         <>
-          {/* ── DEMO TAB ─────────────────────────────────────────── */}
-          {tab === 'demo' && (
-            <section className="grid grid-cols-2 gap-5">
-
-              {/* Chart 1: Pie — risk level distribution */}
-              <ChartCard title="Répartition des niveaux de risque" subtitle="Distribution"
-                badge={`n = ${ships.length.toLocaleString('fr-FR')}`}>
-                <Plot
-                  data={pieData}
-                  layout={{
-                    ...PL,
-                    margin: { t: 8, r: 12, b: 8, l: 12 },
-                    showlegend: true,
-                    legend: legendH,
-                  }}
-                  config={CFG} style={{ width: '100%', height: 260 }} useResizeHandler
-                />
-                <div className="grid grid-cols-4 gap-1 text-[11px] mt-2 text-center">
-                  {[{ l: 'Normal', v: normal }, { l: 'Suspect', v: suspect },
-                    { l: 'Critical', v: critical }, { l: 'Ghost', v: ghost }].map(({ l, v }) => (
-                    <div key={l}>
-                      <div style={{ color: 'var(--muted)' }}>{l}</div>
-                      <div className="mono font-bold">{v.toLocaleString('fr-FR')}</div>
-                    </div>
-                  ))}
-                </div>
-              </ChartCard>
-
-              {/* Chart 2: Horizontal bar — anomaly types by count */}
-              <ChartCard title="Types d'anomalies détectées" subtitle="Anomalies"
-                badge={`${anomalies.length.toLocaleString('fr-FR')} détections`}>
-                <div className="text-[11px] mb-2" style={{ color: 'var(--muted)' }}>
-                  <span className="dot" style={{ background: '#7f1d1d', display: 'inline-block', verticalAlign: 'middle', marginRight: 4 }} />Poids majeur (≥ 0.25)
-                  <span className="dot ml-4" style={{ background: '#f97316', display: 'inline-block', verticalAlign: 'middle', marginRight: 4 }} />Poids mineur
-                </div>
-                <Plot
-                  data={anomBarData}
-                  layout={{
-                    ...PL,
-                    margin: { t: 8, r: 20, b: 30, l: 120 },
-                    xaxis: { title: 'Nombre de détections' },
-                    yaxis: { automargin: true },
-                    showlegend: false,
-                  }}
-                  config={CFG} style={{ width: '100%', height: 260 }} useResizeHandler
-                />
-              </ChartCard>
-
-              {/* Chart 3: Grouped bar — severity per anomaly type */}
-              <ChartCard title="Sévérité par type d'anomalie" subtitle="Sévérité" badge="Top 6 types">
-                <Plot
-                  data={sevTraces}
-                  layout={{
-                    ...PL,
-                    barmode: 'group',
-                    xaxis: { tickangle: -15 },
-                    yaxis: { title: 'Occurrences' },
-                    showlegend: true,
-                    legend: legendH,
-                  }}
-                  config={CFG} style={{ width: '100%', height: 260 }} useResizeHandler
-                />
-              </ChartCard>
-
-              {/* Chart 4: Bar — average score by ship type */}
-              <ChartCard title="Score moyen par type de navire" subtitle="Flotte" badge="Top 10 types">
-                <Plot
-                  data={typeScoreBar}
-                  layout={{
-                    ...PL,
-                    xaxis: { tickangle: -20 },
-                    yaxis: { title: 'Score moyen', range: [0, 1] },
-                    showlegend: false,
-                  }}
-                  config={CFG} style={{ width: '100%', height: 260 }} useResizeHandler
-                />
-              </ChartCard>
-
-            </section>
-          )}
-
-          {/* ── GRAPH TAB ───────────────────────────────────────── */}
-          {tab === 'graph' && (
-            graphLoad ? (
-              <div className="text-[13px] animate-pulse" style={{ color: 'var(--muted)' }}>
-                Chargement des données graphe…
-              </div>
-            ) : (
-              <section className="grid grid-cols-2 gap-5">
-
-                {/* GRAPH chart 1: Scatter — degree vs score */}
-                <ChartCard
-                  title="Un navire seul est un navire suspect"
-                  subtitle="Degré de connexité vs score"
-                  badge={`n = ${graphShips.length.toLocaleString('fr-FR')}`}>
-                  <div className="text-[11px] mb-2 px-1 py-1.5 rounded-md"
-                    style={{ background: '#fef9ec', color: '#92400e', border: '1px solid #fde68a' }}>
-                    Degré 0 = aucun voisin à 20 nautiques — signal fort d'isolement délibéré
-                  </div>
-                  <Plot
-                    data={degreeScatterTraces}
-                    layout={{
-                      ...PL,
-                      xaxis: { title: 'Degré graphe (voisins à 20 nm)', zeroline: true },
-                      yaxis: { title: 'Score composite', range: [0, 1] },
-                      showlegend: true,
-                      legend: legendH,
-                    }}
-                    config={CFG} style={{ width: '100%', height: 300 }} useResizeHandler
-                  />
-                </ChartCard>
-
-                {/* GRAPH chart 2: Bar — 4 dimensions */}
-                <ChartCard title="Dimensions moyennes par niveau de risque" subtitle="Dimensions">
-                  <Plot
-                    data={dimTraces}
-                    layout={{
-                      ...PL,
-                      barmode: 'group',
-                      xaxis: { tickangle: -10, automargin: true },
-                      yaxis: { title: 'Score moyen', range: [0, 1] },
-                      showlegend: true,
-                      legend: legendH,
-                    }}
-                    config={CFG} style={{ width: '100%', height: 300 }} useResizeHandler
-                  />
-                </ChartCard>
-
-              </section>
-            )
-          )}
-
-          {/* Formula card */}
-          <section className="card mt-6 p-6">
-            <div className="flex items-start justify-between mb-4">
-              <div>
-                <div className="text-[11px] uppercase font-semibold tracking-wide" style={{ color: 'var(--muted)' }}>Méthodologie</div>
-                <h2 className="text-[18px] font-bold tracking-tight">Formule de scoring — mode DEMO</h2>
-                <div className="text-[13px] mt-1" style={{ color: 'var(--muted)' }}>
-                  Score boolean par type : chaque type d'anomalie présent contribue son poids brut (confiance = 1), clippé à [0, 1].
-                </div>
-              </div>
-              <button className="text-[12px] font-semibold border rounded-lg px-3 py-1.5"
-                style={{ borderColor: 'var(--line)', background: 'var(--paper)' }}>Documentation →</button>
+          {/* Row 1: scatter + bar */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={scatterTraces} layout={CHART_LAYOUT('Vitesse vs Score de suspicion')} config={CONF} style={{ width: '100%' }} />
             </div>
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={barTrace} layout={CHART_LAYOUT('Anomalies par type')} config={CONF} style={{ width: '100%' }} />
+            </div>
+          </div>
 
-            <div className="grid grid-cols-12 gap-6 mt-4">
-              <div className="col-span-7 rounded-xl border p-5"
-                style={{ background: 'linear-gradient(135deg,#f5f8fd,#eaf1fb)', borderColor: 'var(--line)' }}>
-                <div className="mono text-[14px] leading-relaxed" style={{ color: 'var(--ink-2)' }}>
-                  <span className="text-[15px] font-bold">score(s)</span>{' '}
-                  = clip(Σ{' '}
-                  <span className="font-bold" style={{ color: 'var(--navy-3)' }}>wᵢ</span>
-                  {' '}· 𝟙[typeᵢ présent], 0, 1)
-                </div>
-                <div className="mt-4 grid grid-cols-3 gap-3 text-[12.5px]">
-                  {[
-                    { w: 'AIS Disabled · 0.30',  desc: 'Coupure complète du transpondeur AIS (SOLAS V)' },
-                    { w: 'MMSI Spoofing · 0.25', desc: 'Usurpation d\'identité maritime (IMO Circ.289)' },
-                    { w: 'Speed Anomaly · 0.20', desc: 'Vitesse physiquement impossible — manipulation AIS' },
-                  ].map(({ w, desc }) => (
-                    <div key={w} className="rounded-lg p-3 border" style={{ background: 'var(--paper)', borderColor: 'var(--line)' }}>
-                      <div className="mono font-bold text-[11px]" style={{ color: 'var(--navy)' }}>{w}</div>
-                      <div className="mt-0.5 text-[11px]" style={{ color: 'var(--muted)' }}>{desc}</div>
-                    </div>
-                  ))}
-                </div>
-                <div className="text-[12px] mt-4" style={{ color: 'var(--muted)' }}>
-                  Score normalisé sur [0, 1]. Seuils calibrés sur les percentiles empiriques (p65/p90/p98) du jeu de données.
-                </div>
+          {/* Row 2: timeline + top 10 flags */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={timelineTraces}
+                layout={{ ...CHART_LAYOUT('Anomalies par type dans le temps'), showlegend: true }}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={flagTrace}
+                layout={{ ...CHART_LAYOUT('Top 10 pavillons — navires suspects (score > 0.3)'),
+                  yaxis: { ...CHART_LAYOUT('').yaxis, autorange: true } }}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+          </div>
+
+          {/* Row 3: heatmap AIS + radar */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={heatmapTrace}
+                layout={{ ...CHART_LAYOUT('Heatmap — Coupures AIS par heure × jour'),
+                  xaxis: { ...CHART_LAYOUT('').xaxis, title: 'Heure' },
+                  yaxis: { ...CHART_LAYOUT('').yaxis, title: 'Jour' } }}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={radarData}
+                layout={{ ...CHART_LAYOUT('Profil anomalie — Ghost Fleet vs Normal'),
+                  polar: { radialaxis: { visible: true, range: [0, 100] } },
+                  showlegend: true }}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+          </div>
+
+          {/* Row 4: top 10 ships + co-occurrence */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={hbarTrace}
+                layout={{ ...CHART_LAYOUT('Top 10 navires par score'),
+                  yaxis: { ...CHART_LAYOUT('').yaxis, autorange: 'reversed' } }}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={coOccurrenceData}
+                layout={{ ...CHART_LAYOUT('Co-occurrence des types d\'anomalie'),
+                  xaxis: { ...CHART_LAYOUT('').xaxis, tickangle: -30 } }}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+          </div>
+
+          {/* Methodology */}
+          <section className="bg-white border border-[#e5ebf2] rounded-[14px] p-6 mb-8 shadow-card">
+            <h2 className="text-[18px] font-bold text-[#1e3a5f] mb-4">Méthodologie de détection</h2>
+            <div className="space-y-4 text-sm text-[#0f172a]">
+              <div>
+                <h3 className="text-[#0ea5e9] font-semibold mb-1">Isolation Forest (ML)</h3>
+                <p>L&apos;Isolation Forest isole les anomalies en partitionnant aléatoirement l&apos;espace des caractéristiques. Paramètre <code className="bg-slate-100 px-1 rounded">contamination=0.05</code> (5% de navires suspects).</p>
               </div>
-
-              <div className="col-span-5 rounded-xl border p-5" style={{ background: 'var(--paper)', borderColor: 'var(--line)' }}>
-                <div className="text-[12px] uppercase font-bold tracking-wide mb-3" style={{ color: 'var(--ink-2)' }}>Seuils de classification</div>
-                <div className="space-y-2.5 text-[13px]">
-                  {[
-                    { color: '#22c55e', label: 'Normal',      range: '0.00 ≤ s < 0.19' },
-                    { color: '#f97316', label: 'Suspect',     range: '0.19 ≤ s < 0.44' },
-                    { color: '#ef4444', label: 'Critical',    range: '0.44 ≤ s < 0.68' },
-                    { color: '#7f1d1d', label: 'Ghost Fleet', range: '0.68 ≤ s ≤ 1.00' },
-                  ].map(({ color, label, range }) => (
-                    <div key={label} className="flex items-center justify-between">
-                      <span className="flex items-center gap-2">
-                        <span className="dot" style={{ background: color }} /> {label}
-                      </span>
-                      <span className="mono">{range}</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-4 pt-4 border-t text-[12px]" style={{ borderColor: 'var(--line)', color: 'var(--muted)' }}>
-                  La bascule <span className="font-semibold mono text-[11.5px]" style={{ color: 'var(--ink)' }}>GRAPH</span> remplace le scoring boolean par un score de centralité dans le réseau de proximité (PageRank + similarité de route).
-                </div>
+              <div>
+                <h3 className="text-[#0ea5e9] font-semibold mb-1">Fake Position — vitesse implicite</h3>
+                <p>Flaggué uniquement si la vitesse impliquée entre deux points AIS consécutifs dépasse 60 nœuds — plafond physique absolu (les navires militaires les plus rapides atteignent ~55 kn).</p>
               </div>
             </div>
           </section>
 
-          {/* Footer */}
-          <div className="mt-8 text-[11.5px] flex items-center justify-between" style={{ color: 'var(--muted)' }}>
-            <div>Ministère des Armées · DRM · Cellule Ghost Fleet</div>
-            <div className="flex items-center gap-4">
-              <span>Diffusion restreinte</span><span>·</span><span>Build 2.4.1</span><span>·</span><span>© RF 2026</span>
+          {/* Q9 — Zone stats table */}
+          {zoneStats.length > 0 && (
+            <section className="bg-white border border-[#e5ebf2] rounded-[14px] p-6 mb-8 shadow-card">
+              <h2 className="text-[18px] font-bold text-[#1e3a5f] mb-2">Statistiques par zone de risque</h2>
+              {(() => {
+                const top = zoneStats[0]
+                return top ? (
+                  <p className="text-sm text-[#64748b] mb-4">
+                    Zone la plus dangereuse : <b className="text-[#dc2626]">{top.name}</b> avec{' '}
+                    <b>{top.suspicious_behavior_count}</b> comportements suspects
+                  </p>
+                ) : null
+              })()}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-slate-50 text-[#64748b] text-xs uppercase tracking-wide">
+                      <th className="px-4 py-2 text-left">Zone</th>
+                      <th className="px-4 py-2 text-left">Niveau de risque</th>
+                      <th className="px-4 py-2 text-right">Navires détectés</th>
+                      <th className="px-4 py-2 text-right">Comportements suspects</th>
+                      <th className="px-4 py-2 text-right">Navires critiques</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {zoneStats.map((z, i) => {
+                      const isTop = i === 0
+                      const badge = {
+                        Critical: 'bg-red-100 text-red-700',
+                        High:     'bg-orange-100 text-orange-700',
+                        Medium:   'bg-yellow-100 text-yellow-700',
+                        Low:      'bg-green-100 text-green-700',
+                      }[z.risk_level] ?? 'bg-slate-100 text-slate-600'
+                      return (
+                        <tr key={z.zone_id} className={`border-t border-slate-100 ${isTop ? 'font-semibold bg-red-50' : ''}`}>
+                          <td className="px-4 py-2 text-[#0f172a]">{z.name}</td>
+                          <td className="px-4 py-2">
+                            <span className={`px-2 py-0.5 rounded text-xs font-semibold ${badge}`}>{z.risk_level}</span>
+                          </td>
+                          <td className="px-4 py-2 text-right text-[#0f172a]">{z.ship_count}</td>
+                          <td className="px-4 py-2 text-right text-[#dc2626] font-medium">{z.suspicious_behavior_count}</td>
+                          <td className="px-4 py-2 text-right text-[#d97706] font-medium">{z.critical_ship_count}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
+
+          {/* Anomaly table */}
+          <section>
+            <div className="flex flex-wrap items-center gap-4 mb-4">
+              <h2 className="text-[18px] font-bold text-[#1e3a5f]">Tableau des anomalies</h2>
+              <input type="text" placeholder="Filtrer par MMSI..." value={filter} onChange={e => setFilter(e.target.value)}
+                className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]" />
+              <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+                className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]">
+                {anomTypes.map(t => <option key={t} value={t}>{t === 'all' ? 'Tous les types' : t}</option>)}
+              </select>
+              <span className="text-[#64748b] text-xs">{filteredAnom.length} anomalie(s)</span>
             </div>
+            <ShipTable ships={filteredAnom} columns={anomColumns} />
+          </section>
+        </>
+      )}
+
+      {/* ── GRAPH TAB ── */}
+      {tab === 'graph' && (
+        <>
+          {/* Explanation */}
+          <section className="bg-[#f5f3ff] border border-purple-200 rounded-xl p-5 mb-6 shadow-sm">
+            <h2 className="text-base font-semibold text-[#7c3aed] mb-2">
+              Mode GRAPH — Raffinement par appartenance au groupe H3
+            </h2>
+            <p className="text-sm text-[#0f172a] leading-relaxed mb-3">
+              Le mode GRAPH affine le scoring DEMO par la théorie des groupes H3 (Uber).
+              Les navires appartenant à un convoi reçoivent une <b>réduction de score</b> —
+              la flotte fantôme ne navigue <em>jamais</em> en groupe.
+              Les navires isolés conservent leur score DEMO intégral.
+            </p>
+            <div className="grid grid-cols-3 gap-3 text-xs">
+              {[['2–3 navires','10–20%'],['4–5 navires','30–40%'],['6+ navires','50% (max)']].map(([label, pct]) => (
+                <div key={label} className="bg-white rounded-lg p-3 border border-purple-100">
+                  <p className="text-[#7c3aed] font-bold mb-1">Convoi {label}</p>
+                  <p className="text-[#475569]">Réduction : {pct}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Sankey — most impactful chart */}
+          <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm mb-6">
+            <Plot data={sankeyData}
+              layout={{
+                ...CHART_LAYOUT('Flux de reclassification DEMO → GRAPH (faux positifs éliminés)'),
+                font: { size: 12 },
+              }}
+              config={CONF} style={{ width: '100%', minHeight: 360 }} />
+          </div>
+
+          {/* DEMO vs GRAPH scatter + discount bar */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={demoVsGraphTraces}
+                layout={{
+                  ...CHART_LAYOUT('Score DEMO vs Score GRAPH'),
+                  xaxis: { ...CHART_LAYOUT('').xaxis, title: 'Score DEMO', range: [0, 1] },
+                  yaxis: { ...CHART_LAYOUT('').yaxis, title: 'Score GRAPH', range: [0, 1] },
+                }}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
+              <Plot data={discountBarTrace}
+                layout={CHART_LAYOUT('Répartition des réductions de score par taille de groupe')}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+          </div>
+
+          {/* Score delta box */}
+          <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm mb-6">
+            <Plot data={deltaBoxTraces}
+              layout={{
+                ...CHART_LAYOUT('Réduction score DEMO→GRAPH par niveau de risque final'),
+                yaxis: { ...CHART_LAYOUT('').yaxis, title: 'demo_score − graph_score', zeroline: true },
+              }}
+              config={CONF} style={{ width: '100%' }} />
           </div>
         </>
       )}

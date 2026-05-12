@@ -1,15 +1,19 @@
 import Link from 'next/link'
+import Image from 'next/image'
 import { useRouter } from 'next/router'
 import { useContext } from 'react'
 import { ModeContext } from '../lib/supabase'
 
 const LINKS = [
-  { href: '/',        label: 'Dashboard',  graphOnly: false },
-  { href: '/carte',   label: 'Carte 2D',   graphOnly: false },
-  { href: '/analyse', label: 'Analyse ML', graphOnly: false },
-  { href: '/graphe',  label: 'Graphe',     graphOnly: false },
-  { href: '/convois', label: 'Convois',    graphOnly: true  },
-  { href: '/rapport', label: 'Rapport',    graphOnly: false },
+  { href: '/',         label: 'Dashboard',  graphOnly: false },
+  { href: '/carte',    label: 'Carte 2D',   graphOnly: false },
+  { href: '/analyse',  label: 'Analyse ML', graphOnly: false },
+  { href: '/zones',    label: 'Zones',      graphOnly: false },
+  { href: '/temporal', label: 'Temporel',   graphOnly: false },
+  { href: '/graphe',   label: 'Graphe',     graphOnly: true  },
+  { href: '/groupes',  label: 'Groupes',    graphOnly: true  },
+  { href: '/convois',  label: 'Convois',    graphOnly: true  },
+  { href: '/rapport',  label: 'Rapport',    graphOnly: false },
 ]
 
 export default function Navbar() {
@@ -22,11 +26,13 @@ export default function Navbar() {
 
         {/* Brand */}
         <div className="flex items-center gap-3 shrink-0">
-          <div className="w-9 h-9 rounded-lg bg-white/10 flex items-center justify-center text-lg">🚢</div>
-          <div className="leading-tight">
-            <div className="font-extrabold tracking-tight text-[15.5px]">GHOST FLEET DETECTOR</div>
-            <div className="mono text-[10.5px] text-[#9fb0c8] tracking-[.14em]">MINISTÈRE DES ARMÉES · DRM</div>
-          </div>
+          <Image
+            src="/logo-ministere-armees.svg"
+            alt="Ministère des Armées"
+            width={140}
+            height={46}
+            priority
+          />
         </div>
 
         {/* Nav links */}
@@ -45,8 +51,7 @@ export default function Navbar() {
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="rgba(255,255,255,.6)" strokeWidth="2" className="shrink-0">
               <circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>
             </svg>
-            <input className="bg-transparent outline-none w-full text-[13px] text-white placeholder-white/40" placeholder="Rechercher MMSI, navire, opérateur…" />
-            <span className="mono text-[10px] text-white/40 border border-white/15 rounded px-1.5 py-0.5">⌘ K</span>
+            <input className="bg-transparent outline-none w-full text-[13px] text-white placeholder-white/40" placeholder="Rechercher MMSI, navire…" />
           </div>
 
           {/* DEMO / GRAPH */}

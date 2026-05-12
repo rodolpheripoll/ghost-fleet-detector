@@ -147,3 +147,75 @@ def compute_scores(
         print(f"  {level:<15}: {cnt}")
 
     return scored
+
+
+def compute_zone_stats(
+    scored_df: pd.DataFrame,
+    behaviors_df: pd.DataFrame,
+    zones_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Q9 — Compute per-zone statistics.
+
+    For each risk zone (bounding box), count:
+      - ship_count               : unique MMSIs whose last position is inside the zone
+      - suspicious_behavior_count: behavior records (behaviors_df) from MMSIs in the zone
+      - critical_ship_count      : ships with score >= 0.5 inside the zone
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        zone_id, name, risk_level,
+        ship_count, suspicious_behavior_count, critical_ship_count
+    """
+    print("[scoring] Computing zone statistics (Q9)...")
+
+    if zones_df.empty:
+        return pd.DataFrame()
+
+    # Last known position per ship
+    last_pos = (
+        scored_df.copy()
+        .sort_values("timestamp")
+        .drop_duplicates("mmsi", keep="last")
+    )
+    last_pos["mmsi"] = last_pos["mmsi"].astype(str)
+
+    behaviors = behaviors_df.copy()
+    if not behaviors.empty and "mmsi" in behaviors.columns:
+        behaviors["mmsi"] = behaviors["mmsi"].astype(str)
+
+    records = []
+    for _, zone in zones_df.iterrows():
+        lat_min = zone.get("lat_min")
+        lat_max = zone.get("lat_max")
+        lon_min = zone.get("lon_min")
+        lon_max = zone.get("lon_max")
+        if any(v is None or pd.isna(v) for v in [lat_min, lat_max, lon_min, lon_max]):
+            continue
+
+        in_zone = last_pos[
+            last_pos["latitude"].between(lat_min, lat_max) &
+            last_pos["longitude"].between(lon_min, lon_max)
+        ]
+        mmsis_in_zone = set(in_zone["mmsi"].astype(str).unique())
+
+        ship_count      = len(mmsis_in_zone)
+        critical_count  = int((in_zone["score"] >= 0.5).sum()) if "score" in in_zone.columns else 0
+
+        behav_count = 0
+        if not behaviors.empty and "mmsi" in behaviors.columns:
+            behav_count = int(behaviors["mmsi"].isin(mmsis_in_zone).sum())
+
+        records.append({
+            "zone_id":                   str(zone.get("zone_id", "")),
+            "name":                      str(zone.get("name", "")),
+            "risk_level":                str(zone.get("risk_level", "")),
+            "ship_count":                ship_count,
+            "suspicious_behavior_count": behav_count,
+            "critical_ship_count":       critical_count,
+        })
+
+    df = pd.DataFrame(records)
+    print(f"[scoring] Zone stats computed for {len(df)} zones.")
+    return df

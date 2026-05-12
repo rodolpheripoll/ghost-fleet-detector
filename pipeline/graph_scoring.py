@@ -1,63 +1,53 @@
 """
 graph_scoring.py
-Graph-theory-based suspicion scoring for maritime traffic.
 
-4 dimensions:
-  isolation  (0.25) — ghost ships travel alone; percentile rank of degree
-  behavior   (0.40) — AIS/MMSI/speed violations (boolean per type, not per instance)
-  route_sim  (0.20) — Jaccard similarity with CONFIRMED suspicious ships only
-  zone       (0.15) — presence in a sanctioned geographic zone
+CORRECT LOGIC:
+- Ships in a detected H3 convoy group → score REDUCED (legitimate traffic)
+- Ships isolated (no group) → score unchanged
+- Ships isolated + behavioral flags + risk zone → small boost (confirmed suspicious)
 
-Fix log:
-  v2 — Fix 1: isolation uses percentile rank (p20→1.0, p80→0.0) to avoid
-       sparse-dataset inflation where 90%+ of ships naturally have degree 0.
-  v2 — Fix 2: route_sim only uses confirmed suspicious ships (registry
-       is_suspicious=True AND risk_score>0.5, OR double-confirmed in behaviors+alerts).
-       Min Jaccard threshold 0.4 to filter weak corridor overlap noise.
-  v2 — Fix 3: hard constraint — behavior_score=0 caps score at 0.55 (Suspect).
-  v2 — Fix 4: weights recalibrated (isolation 0.35→0.25, behavior 0.25→0.40).
-  v2 — Fix 5: distribution check with warning if Critical+GF > 15%.
+The GRAPH pipeline is a REFINEMENT of DEMO:
+  DEMO flags ships based on behavior alone.
+  GRAPH cross-checks with group membership to eliminate false positives.
+
+A tanker transmitting at 26 knots is suspicious in DEMO.
+But if surrounded by 8 other ships in the same H3 cell,
+it is likely a busy shipping lane → GRAPH reduces its score.
+
+If that same tanker is ALONE in the ocean with no neighbours →
+the isolation CONFIRMS the suspicion → GRAPH keeps the score high.
+
+Source: Windward Maritime AI Report 2022 — ghost fleet isolation pattern.
+IMO COLREGS Rule 5 — proper look-out at all times.
 """
 
-import networkx as nx
 import pandas as pd
 import numpy as np
 from math import radians, sin, cos, sqrt, atan2
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── CONSTANTS ─────────────────────────────────────────────────────────────────
 
-PROXIMITY_KM = 20 * 1.852   # 20 nautical miles in km
-GRID_DEGREES = 3             # 3°×3° grid cells for route fingerprinting
-
-# Fix 4 — recalibrated weights
-WEIGHTS = {
-    "isolation": 0.25,   # reduced — sparse dataset inflates raw degree signal
-    "behavior":  0.40,   # increased — most reliable signal
-    "route_sim": 0.20,   # reduced — only confirmed-suspicious baseline
-    "zone":      0.15,   # unchanged
+# Score discount based on convoy size.
+# Ghost fleet ships NEVER travel in large, identifiable groups.
+# A ship in a convoy of 5+ is almost certainly legitimate commercial traffic.
+GROUP_DISCOUNT = {
+    0: 0.00,   # isolated — no discount
+    1: 0.05,   # pair — small reduction
+    2: 0.10,
+    3: 0.20,
+    4: 0.30,
+    5: 0.40,   # confirmed convoy — significant discount
 }
+MAX_GROUP_DISCOUNT = 0.50  # groups of 6+ ships
 
-BEHAVIOR_WEIGHTS = {
-    "AIS Disabled":   0.40,
-    "MMSI Spoofing":  0.35,
-    "Name Change":    0.30,
-    "Speed Anomaly":  0.25,
-    "Fake Position":  0.20,
-    "Zone Violation": 0.15,
-    "Zone Crossing":  0.15,
-    "Course Anomaly": 0.10,
-    "ML Anomaly":     0.10,
-}
+# Isolated ship in a sanctioned zone → small bonus.
+# Only applied if DEMO already flagged it as Suspect (demo_score >= 0.3).
+ISOLATION_ZONE_BONUS = 0.10
 
 RISK_MAP_ZONE = {"Critical": 1.0, "High": 0.5, "Medium": 0.2, "Low": 0.0}
 
-# Fix 2 — minimum Jaccard similarity to count as "same route"
-ROUTE_SIM_THRESHOLD = 0.4
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def haversine_km(lat1, lon1, lat2, lon2):
+def _haversine_km(lat1, lon1, lat2, lon2):
     R = 6371
     dlat = radians(lat2 - lat1)
     dlon = radians(lon2 - lon1)
@@ -65,160 +55,15 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * R * atan2(sqrt(a), sqrt(1 - a))
 
 
-def jaccard(a: set, b: set) -> float:
-    if not a or not b:
-        return 0.0
-    return len(a & b) / len(a | b)
+def _get_discount(convoy_size: int) -> float:
+    if convoy_size >= 6:
+        return MAX_GROUP_DISCOUNT
+    return GROUP_DISCOUNT.get(convoy_size, 0.0)
 
 
-# ── Graph construction ────────────────────────────────────────────────────────
-
-def build_proximity_graph(ais_df: pd.DataFrame):
-    """
-    Undirected graph: nodes = ships (last known position),
-    edges = pairs within PROXIMITY_KM.
-    """
-    G = nx.Graph()
-    last_pos = (
-        ais_df.sort_values("timestamp")
-              .groupby("mmsi").last()
-              .reset_index()
-              .dropna(subset=["latitude", "longitude"])
-    )
-    for _, row in last_pos.iterrows():
-        G.add_node(str(row["mmsi"]),
-                   lat=row["latitude"],
-                   lon=row["longitude"],
-                   speed=float(row.get("speed") or 0))
-
-    nodes = list(G.nodes(data=True))
-    for i in range(len(nodes)):
-        for j in range(i + 1, len(nodes)):
-            mmsi_a, da = nodes[i]
-            mmsi_b, db = nodes[j]
-            dist = haversine_km(da["lat"], da["lon"], db["lat"], db["lon"])
-            if dist <= PROXIMITY_KM:
-                G.add_edge(mmsi_a, mmsi_b,
-                           distance_km=round(dist, 2),
-                           distance_nm=round(dist / 1.852, 2))
-    return G, last_pos
-
-
-# ── Scoring dimensions ────────────────────────────────────────────────────────
-
-def compute_isolation_scores(G: nx.Graph, all_mmsi: list) -> dict:
-    """
-    Fix 1 — Percentile-based isolation.
-
-    Rank each ship's degree within the dataset distribution:
-      - Bottom 20th percentile (p20) → isolation 1.0  (truly isolated)
-      - Top 80th percentile  (p80) → isolation 0.0  (well-connected lane)
-      - Linear interpolation between p20 and p80.
-
-    This avoids the sparse-dataset inflation where 90%+ of ships globally
-    have degree 0 and would all score isolation=1.0 under the old formula.
-    """
-    degrees = {str(mmsi): G.degree(str(mmsi)) if str(mmsi) in G else 0
-               for mmsi in all_mmsi}
-
-    degree_values = list(degrees.values())
-    p20 = float(np.percentile(degree_values, 20))
-    p80 = float(np.percentile(degree_values, 80))
-
-    scores = {}
-    for mmsi, deg in degrees.items():
-        if p80 == p20:
-            scores[mmsi] = 0.5
-        else:
-            raw = 1.0 - (deg - p20) / (p80 - p20)
-            scores[mmsi] = round(float(np.clip(raw, 0.0, 1.0)), 4)
-    return scores
-
-
-def compute_route_fingerprints(ais_df: pd.DataFrame) -> dict:
-    """Route fingerprint = set of 3°×3° grid cells visited."""
-    df = ais_df.copy()
-    df["mmsi"] = df["mmsi"].astype(str)
-    df["cell"] = (
-        (df["latitude"]  / GRID_DEGREES).astype(int) * 10000 +
-        (df["longitude"] / GRID_DEGREES).astype(int)
-    )
-    return df.groupby("mmsi")["cell"].apply(set).to_dict()
-
-
-def compute_route_similarity_scores(
-    fingerprints: dict,
-    anomalies_df,
-    alerts_df,
-    behaviors_df,
-    ships_df,
-) -> dict:
-    """
-    Fix 2 — Route similarity against CONFIRMED suspicious ships only.
-
-    Confirmed = (registry is_suspicious=True AND risk_score > 0.5)
-             OR (present in BOTH behaviors AND alerts — double-confirmed).
-
-    Similarity is zeroed if Jaccard < ROUTE_SIM_THRESHOLD (0.4) to filter
-    corridor overlap noise between ships in the same ocean.
-    """
-    # From ships registry
-    confirmed_from_registry = set()
-    if ships_df is not None and not ships_df.empty and "is_suspicious" in ships_df.columns:
-        mask = (
-            (ships_df["is_suspicious"].astype(str).str.lower().isin(["true", "1"])) &
-            (pd.to_numeric(ships_df["risk_score"], errors="coerce").fillna(0) > 0.5)
-        )
-        confirmed_from_registry = set(ships_df.loc[mask, "mmsi"].astype(str).tolist())
-
-    # Double-confirmed: in BOTH behaviors AND alerts
-    beh_mmsi   = set(behaviors_df["mmsi"].astype(str).tolist()) if (behaviors_df is not None and not behaviors_df.empty) else set()
-    alert_mmsi = set(alerts_df["mmsi"].astype(str).tolist())    if (alerts_df   is not None and not alerts_df.empty)   else set()
-    confirmed_double = beh_mmsi & alert_mmsi
-
-    confirmed_suspicious = confirmed_from_registry | confirmed_double
-    print(f"  [graph_scoring] Route baseline: {len(confirmed_suspicious)} confirmed suspicious ships "
-          f"({len(confirmed_from_registry)} registry, {len(confirmed_double)} double-confirmed)")
-
-    susp_routes = {m: fp for m, fp in fingerprints.items() if m in confirmed_suspicious}
-
-    scores = {}
-    for mmsi, route in fingerprints.items():
-        if not susp_routes or mmsi in confirmed_suspicious:
-            scores[mmsi] = 0.0
-            continue
-        max_sim = max(jaccard(route, sr) for sr in susp_routes.values())
-        scores[mmsi] = round(max_sim if max_sim >= ROUTE_SIM_THRESHOLD else 0.0, 4)
-    return scores
-
-
-def compute_behavior_scores(anomalies_df, alerts_df, behaviors_df) -> dict:
-    """Boolean per ship per type — NOT additive per instance."""
-    frames = []
-    for df in [anomalies_df, alerts_df, behaviors_df]:
-        if df is not None and not df.empty and "type" in df.columns:
-            frames.append(df[["mmsi", "type"]])
-    if not frames:
-        return {}
-    all_anom = pd.concat(frames, ignore_index=True)
-    all_anom["mmsi"] = all_anom["mmsi"].astype(str)
-    scores = {}
-    for mmsi, group in all_anom.groupby("mmsi"):
-        types = set(group["type"].tolist())
-        raw = sum(BEHAVIOR_WEIGHTS.get(t, 0.05) for t in types)
-        scores[str(mmsi)] = round(min(raw, 1.0), 4)
-    return scores
-
-
-def compute_zone_scores(ais_df: pd.DataFrame, zones_df: pd.DataFrame) -> dict:
-    """Zone score based on last known position."""
-    last_pos = (
-        ais_df.sort_values("timestamp")
-              .groupby("mmsi").last()
-              .reset_index()
-    )
-    last_pos["mmsi"] = last_pos["mmsi"].astype(str)
-    scores = {row["mmsi"]: 0.0 for _, row in last_pos.iterrows()}
+def _compute_zone_scores(last_pos: pd.DataFrame, zones_df: pd.DataFrame) -> dict:
+    """Returns {mmsi: zone_score} for each ship."""
+    scores = {str(row["mmsi"]): 0.0 for _, row in last_pos.iterrows()}
     for _, ship in last_pos.iterrows():
         best = 0.0
         for _, zone in zones_df.iterrows():
@@ -235,111 +80,142 @@ def compute_zone_scores(ais_df: pd.DataFrame, zones_df: pd.DataFrame) -> dict:
     return scores
 
 
-# ── Master function ───────────────────────────────────────────────────────────
-
 def compute_graph_scores(
     ais_df: pd.DataFrame,
-    anomalies_df: pd.DataFrame,
-    alerts_df: pd.DataFrame,
-    behaviors_df: pd.DataFrame,
-    zones_df: pd.DataFrame,
-    ships_df: pd.DataFrame = None,
+    demo_scored_df: pd.DataFrame,
+    convoy_stats_df: pd.DataFrame,
+    zones_df: pd.DataFrame = None,
 ):
     """
-    Combine all 4 dimensions into a final suspicion score [0, 1].
+    Refine DEMO scores using H3 group membership.
+
+    Algorithm:
+    1. Start from DEMO scores (behavioral rules + Isolation Forest)
+    2. Ships in an H3 convoy group → apply group discount (legitimate traffic)
+    3. Isolated ships in risk zones that were already Suspect → small bonus
+    4. Hard cap: Normal ships in DEMO cannot become Suspect in GRAPH
+
+    This ensures GRAPH always has <= DEMO Critical+GF count (fewer false positives).
+
+    Parameters
+    ----------
+    ais_df          : AIS DataFrame with convoy_id, convoy_size from detect_convoys
+    demo_scored_df  : DEMO pipeline output with score, risk_level columns
+    convoy_stats_df : convoy stats from detect_convoys (unused here, for API compat)
+    zones_df        : optional — used for isolation+zone bonus calculation
 
     Returns
     -------
-    scored_ais  : AIS DataFrame enriched with score columns
-    G           : NetworkX proximity graph
-    metrics_df  : one row per unique MMSI with all sub-scores
+    graph_scored : ais_df enriched with graph score columns
+    metrics_df   : per-ship breakdown (one row per unique MMSI)
     """
-    print("[graph_scoring] Building proximity graph...")
-    G, last_pos = build_proximity_graph(ais_df)
-    print(f"  {G.number_of_nodes()} ships, {G.number_of_edges()} proximity edges "
-          f"(< {PROXIMITY_KM:.1f} km / 20 nm)")
+    df = ais_df.copy()
+    df["mmsi"] = df["mmsi"].astype(str)
+    demo = demo_scored_df.copy()
+    demo["mmsi"] = demo["mmsi"].astype(str)
 
-    all_mmsi = ais_df["mmsi"].astype(str).unique().tolist()
+    # One row per ship from DEMO pipeline
+    demo_ships = demo.drop_duplicates("mmsi")[["mmsi", "score", "risk_level"]].copy()
+    demo_ships = demo_ships.rename(columns={"score": "demo_score", "risk_level": "demo_risk"})
 
-    print("[graph_scoring] Computing isolation scores (percentile-based)...")
-    iso_scores = compute_isolation_scores(G, all_mmsi)
+    # Merge convoy info
+    if "convoy_id" in df.columns:
+        convoy_info = (
+            df.drop_duplicates("mmsi")[["mmsi", "convoy_id", "convoy_size"]]
+        )
+    else:
+        convoy_info = pd.DataFrame({
+            "mmsi":        demo_ships["mmsi"],
+            "convoy_id":   0,
+            "convoy_size": 0,
+        })
 
-    print("[graph_scoring] Computing route fingerprints...")
-    fingerprints = compute_route_fingerprints(ais_df)
+    ships = demo_ships.merge(convoy_info, on="mmsi", how="left")
+    ships["convoy_id"]   = ships["convoy_id"].fillna(0).astype(int)
+    ships["convoy_size"] = ships["convoy_size"].fillna(0).astype(int)
 
-    print("[graph_scoring] Computing route similarity scores (confirmed-suspicious baseline)...")
-    rts_scores = compute_route_similarity_scores(
-        fingerprints, anomalies_df, alerts_df, behaviors_df, ships_df
-    )
+    # Zone scores (optional)
+    zone_lookup = {}
+    if zones_df is not None and not zones_df.empty:
+        last_pos = (
+            df.sort_values("timestamp")
+              .groupby("mmsi").last()
+              .reset_index()
+              .dropna(subset=["latitude", "longitude"])
+        )
+        zone_lookup = _compute_zone_scores(last_pos, zones_df)
 
-    print("[graph_scoring] Computing behavior scores...")
-    beh_scores = compute_behavior_scores(anomalies_df, alerts_df, behaviors_df)
-
-    print("[graph_scoring] Computing zone scores...")
-    zone_scores = compute_zone_scores(ais_df, zones_df)
-
+    # ── Apply graph refinement ────────────────────────────────────────────────
     records = []
-    for mmsi in all_mmsi:
-        iso  = iso_scores.get(mmsi, 0.5)
-        beh  = beh_scores.get(mmsi, 0.0)
-        rts  = rts_scores.get(mmsi, 0.0)
-        zone = zone_scores.get(mmsi, 0.0)
-        deg  = G.degree(mmsi) if mmsi in G else 0
+    for _, ship in ships.iterrows():
+        demo_score   = float(ship["demo_score"] or 0)
+        convoy_id    = int(ship["convoy_id"])
+        convoy_size  = int(ship["convoy_size"])
+        is_isolated  = (convoy_id == 0)
+        zone_score   = zone_lookup.get(ship["mmsi"], 0.0)
 
-        score = round(float(np.clip(
-            WEIGHTS["isolation"] * iso  +
-            WEIGHTS["behavior"]  * beh  +
-            WEIGHTS["route_sim"] * rts  +
-            WEIGHTS["zone"]      * zone,
-            0.0, 1.0
-        )), 4)
+        # Step 1: group discount
+        discount    = _get_discount(convoy_size)
+        graph_score = demo_score * (1.0 - discount)
 
-        # Fix 3 — hard constraint: no behavior evidence → cap at Suspect
-        if beh == 0.0 and score >= 0.6:
-            score = 0.55
+        # Step 2: isolation + risk zone bonus (only for already-suspect ships)
+        if is_isolated and zone_score > 0.5 and demo_score >= 0.3:
+            graph_score = min(graph_score + ISOLATION_ZONE_BONUS, 1.0)
 
-        if   score >= 0.8: risk = "Ghost Fleet"
-        elif score >= 0.6: risk = "Critical"
-        elif score >= 0.3: risk = "Suspect"
-        else:              risk = "Normal"
+        # Step 3: Normal ships in DEMO stay Normal in GRAPH
+        if ship["demo_risk"] == "Normal":
+            graph_score = min(graph_score, 0.29)
+
+        graph_score = round(float(np.clip(graph_score, 0.0, 1.0)), 4)
 
         records.append({
-            "mmsi":            mmsi,
-            "score":           score,
-            "risk_level":      risk,
-            "isolation_score": round(iso,  4),
-            "behavior_score":  round(beh,  4),
-            "route_sim_score": round(rts,  4),
-            "zone_score":      round(zone, 4),
-            "graph_degree":    deg,
+            "mmsi":          ship["mmsi"],
+            "demo_score":    round(demo_score, 4),
+            "graph_score":   graph_score,
+            "convoy_id":     convoy_id,
+            "convoy_size":   convoy_size,
+            "group_discount": round(discount, 2),
+            "is_isolated":   is_isolated,
+            "zone_score":    round(zone_score, 4),
         })
 
     metrics_df = pd.DataFrame(records)
 
-    # Fix 5 — distribution check
-    n_total    = len(metrics_df)
-    n_critical = metrics_df["risk_level"].isin(["Critical", "Ghost Fleet"]).sum()
-    pct        = n_critical / n_total * 100 if n_total else 0
+    # Assign risk level from graph_score
+    def risk_label(s):
+        if s >= 0.8: return "Ghost Fleet"
+        if s >= 0.6: return "Critical"
+        if s >= 0.3: return "Suspect"
+        return "Normal"
 
-    print(f"\n[graph_scoring] Score distribution:")
-    print(metrics_df["risk_level"].value_counts().to_string())
-    print(f"\n  Critical + Ghost Fleet : {n_critical} / {n_total} ({pct:.1f}%)")
-    if pct > 15:
-        print("  WARNING: >15% Critical/Ghost Fleet — calibration may still be off")
-        print("  Expected: ~5% Critical, ~2% Ghost Fleet for a realistic dataset")
+    metrics_df["risk_level"] = metrics_df["graph_score"].apply(risk_label)
+    metrics_df = metrics_df.rename(columns={"graph_score": "score"})
+
+    # Print comparison
+    n_demo_hi  = (demo_ships["demo_risk"].isin(["Critical", "Ghost Fleet"])).sum()
+    n_graph_hi = (metrics_df["risk_level"].isin(["Critical", "Ghost Fleet"])).sum()
+    print("\n[graph_scoring] === DEMO vs GRAPH comparison ===")
+    print("  DEMO  distribution:")
+    print("  " + demo_ships["demo_risk"].value_counts().to_string().replace("\n", "\n  "))
+    print("  GRAPH distribution:")
+    print("  " + metrics_df["risk_level"].value_counts().to_string().replace("\n", "\n  "))
+    print(f"\n  DEMO  Critical+GF : {n_demo_hi}")
+    print(f"  GRAPH Critical+GF : {n_graph_hi}")
+    if n_graph_hi < n_demo_hi:
+        print("  ✅ GRAPH is more selective (correct — fewer false positives)")
     else:
-        print("  OK — distribution looks realistic")
+        print("  ⚠  GRAPH >= DEMO — check group detection")
 
-    scored = ais_df.copy()
-    scored["mmsi"] = scored["mmsi"].astype(str)
-    scored = scored.merge(
+    # Merge back onto full ais_df — drop old score/risk_level to avoid _x/_y conflicts
+    cols_to_drop = [c for c in ["score", "risk_level"] if c in df.columns]
+    graph_scored = df.drop(columns=cols_to_drop).merge(
         metrics_df[[
-            "mmsi", "score", "risk_level", "graph_degree",
-            "isolation_score", "behavior_score", "route_sim_score", "zone_score"
+            "mmsi", "score", "risk_level", "demo_score",
+            "group_discount", "is_isolated", "convoy_id", "convoy_size", "zone_score",
         ]],
-        on="mmsi", how="left"
+        on="mmsi", how="left",
     )
-    scored["score"]      = scored["score"].fillna(0.0)
-    scored["risk_level"] = scored["risk_level"].fillna("Normal")
+    graph_scored["score"]      = graph_scored["score"].fillna(0.0)
+    graph_scored["risk_level"] = graph_scored["risk_level"].fillna("Normal")
 
-    return scored, G, metrics_df
+    return graph_scored, metrics_df

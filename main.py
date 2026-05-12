@@ -5,6 +5,7 @@ Runs DEMO pipeline (rules + IF) and GRAPH pipeline (graph theory).
 """
 
 import os
+import math
 import pandas as pd
 from dotenv import load_dotenv
 
@@ -13,7 +14,7 @@ load_dotenv()
 from pipeline.ingestion         import load_data
 from pipeline.cleaning          import clean_data
 from pipeline.anomaly_detection import detect_anomalies
-from pipeline.scoring           import compute_scores
+from pipeline.scoring           import compute_scores, compute_zone_stats
 from pipeline.graph_scoring     import compute_graph_scores
 from pipeline.convoy_detection  import detect_convoys
 from pipeline.knowledge_graph   import build_graph
@@ -34,6 +35,11 @@ def _serialize(df: pd.DataFrame) -> list[dict]:
         for k, v in row.items():
             if v == "NaT" or v == "nan":
                 row[k] = None
+            elif isinstance(v, float):
+                if math.isnan(v) or math.isinf(v):
+                    row[k] = None
+                elif v == int(v):
+                    row[k] = int(v)
     return result
 
 
@@ -70,14 +76,14 @@ def _enrich_with_registry(ships_df: pd.DataFrame, registry: pd.DataFrame) -> pd.
 
 
 def push_demo_pipeline(supabase, scored, anomalies, zones, nodes, edges,
-                       convoy_stats, convoy_edges, alerts_df=None):
+                       convoy_stats, convoy_edges, alerts_df=None, behaviors_df=None):
     """Push DEMO pipeline results to Supabase."""
     ships_cols = [
         "mmsi", "timestamp", "latitude", "longitude",
         "speed", "course", "status", "ais_active",
         "score", "risk_level", "prior_risk_score",
         "convoy_id", "convoy_size", "convoy_risk",
-        "ship_name", "ship_type", "flag",
+        "ship_name", "ship_type", "flag", "hour_of_day",
     ]
     available  = [c for c in ships_cols if c in scored.columns]
     ships_data = (
@@ -89,8 +95,10 @@ def push_demo_pipeline(supabase, scored, anomalies, zones, nodes, edges,
     print(f"  [Supabase] ships         -> {len(ships_data)} rows upserted")
 
     if not anomalies.empty:
+        # DELETE before INSERT to prevent accumulation across pipeline runs
+        supabase.table("anomalies").delete().neq("id", "00000000-0000-0000-0000-000000000000").execute()
         supabase.table("anomalies").insert(_serialize(anomalies)).execute()
-        print(f"  [Supabase] anomalies     -> {len(anomalies)} rows inserted")
+        print(f"  [Supabase] anomalies     -> {len(anomalies)} rows inserted (table cleared first)")
 
     zone_cols = ["zone_id", "name", "lat_min", "lat_max",
                  "lon_min", "lon_max", "risk_level", "description"]
@@ -114,12 +122,20 @@ def push_demo_pipeline(supabase, scored, anomalies, zones, nodes, edges,
         supabase.table("convoy_edges").insert(_serialize(convoy_edges)).execute()
         print(f"  [Supabase] convoy_edges  -> {len(convoy_edges)} rows inserted")
 
+    # Alerts from CSV (pre-labelled)
     if alerts_df is not None and not alerts_df.empty:
         alert_cols = ["alert_id", "mmsi", "type", "description",
                       "timestamp", "severity", "status", "assigned_to", "resolution"]
         avail_a = [c for c in alert_cols if c in alerts_df.columns]
         supabase.table("alerts").upsert(_serialize(alerts_df[avail_a])).execute()
         print(f"  [Supabase] alerts        -> {len(alerts_df)} rows upserted")
+
+    # Q9 — Zone stats
+    beh_df = behaviors_df if behaviors_df is not None else pd.DataFrame()
+    zone_stats_df = compute_zone_stats(scored, beh_df, zones)
+    if not zone_stats_df.empty:
+        supabase.table("zone_stats").upsert(_serialize(zone_stats_df)).execute()
+        print(f"  [Supabase] zone_stats    -> {len(zone_stats_df)} rows upserted")
 
     print("  [Supabase] DEMO pipeline pushed successfully.")
 
@@ -130,8 +146,9 @@ def push_graph_pipeline(supabase, graph_scored):
         "mmsi", "timestamp", "latitude", "longitude",
         "speed", "course", "status", "ais_active",
         "score", "risk_level",
-        "isolation_score", "behavior_score", "route_sim_score",
-        "zone_score", "graph_degree",
+        "demo_score", "group_discount", "is_isolated",
+        "convoy_id", "convoy_size", "zone_score",
+        "flag", "ship_type", "hour_of_day",
     ]
     available  = [c for c in graph_cols if c in graph_scored.columns]
     ships_data = (
@@ -174,16 +191,27 @@ if __name__ == "__main__":
     graph, nodes, edges = build_graph(ships_convoys, anomalies, clean["zones"])
     generate_pdf_report(ships_convoys, anomalies, quality_report)
 
-    # ── GRAPH PIPELINE ────────────────────────────────────────────────────────
-    print("\n── GRAPH PIPELINE (graph theory scoring) ──")
-    graph_scored, proximity_graph, graph_metrics = compute_graph_scores(
-        clean["ais"],
-        anomalies,
-        clean.get("alerts",    pd.DataFrame()),
-        clean.get("behaviors", pd.DataFrame()),
-        clean["zones"],
-        ships_df=clean.get("ships"),
+    # ── GRAPH PIPELINE (group-membership refinement of DEMO scores) ──────────
+    print("\n── GRAPH PIPELINE (H3 group refinement) ──")
+    graph_scored, graph_metrics = compute_graph_scores(
+        ships_convoys,   # ais_df with convoy_id / convoy_size from H3 detection
+        scored,          # DEMO scores as baseline
+        convoy_stats,    # H3 convoy stats (for API compatibility)
+        zones_df=clean["zones"],
     )
+
+    # ── Merge ship metadata (flag, type) for enriched frontend charts ─────────
+    ships_meta = clean.get("ships")
+    if ships_meta is not None and not ships_meta.empty:
+        meta_cols = [c for c in ["mmsi", "flag", "type"] if c in ships_meta.columns]
+        meta = ships_meta[meta_cols].copy()
+        meta["mmsi"] = meta["mmsi"].astype(str)
+        if "type" in meta.columns:
+            meta = meta.rename(columns={"type": "ship_type"})
+        for df_obj in [ships_convoys, graph_scored]:
+            df_obj["mmsi"] = df_obj["mmsi"].astype(str)
+        ships_convoys = ships_convoys.merge(meta, on="mmsi", how="left")
+        graph_scored  = graph_scored.merge(meta, on="mmsi", how="left")
 
     # ── PUSH TO SUPABASE ──────────────────────────────────────────────────────
     url = os.getenv("SUPABASE_URL", "").strip()
@@ -198,6 +226,7 @@ if __name__ == "__main__":
             sb, ships_convoys, anomalies, clean["zones"],
             nodes, edges, convoy_stats, convoy_edges,
             alerts_df=clean.get("alerts"),
+            behaviors_df=clean.get("behaviors"),
         )
         push_graph_pipeline(sb, graph_scored)
 

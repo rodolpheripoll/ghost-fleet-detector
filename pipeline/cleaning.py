@@ -30,6 +30,42 @@ def _normalize_ais_active(series: pd.Series) -> pd.Series:
     return series.map(_cast)
 
 
+# ── Q2 — Status normalisation map ────────────────────────────────────────────
+# AIS navigational status values are heterogeneous across data sources.
+# We normalise to three canonical categories for analysis:
+#   "At Anchor"  — vessel at anchor or not under command
+#   "Moored"     — vessel secured to a fixed structure
+#   "Under Way"  — all other situations (moving or drifting)
+
+_STATUS_MAP = {
+    # At Anchor
+    "at anchor":                         "At Anchor",
+    "anchor":                            "At Anchor",
+    "not under command":                 "At Anchor",
+    "not under command (nuc)":           "At Anchor",
+    # Moored
+    "moored":                            "Moored",
+    "secured":                           "Moored",
+    "alongside":                         "Moored",
+    # Under Way — explicit
+    "under way using engine":            "Under Way",
+    "under way sailing":                 "Under Way",
+    "under way":                         "Under Way",
+    "constrained by her draught":        "Under Way",
+    "restricted manoeuvrability":        "Under Way",
+    "engaged in fishing":                "Under Way",
+    "engaged in dredging":               "Under Way",
+    "aground":                           "Under Way",
+}
+
+
+def _normalize_status(series: pd.Series) -> pd.Series:
+    """Normalise raw AIS status strings to At Anchor / Moored / Under Way."""
+    return series.astype(str).str.strip().str.lower().map(
+        lambda v: _STATUS_MAP.get(v, "Under Way")
+    )
+
+
 def clean_data(data: dict) -> tuple[dict, dict]:
     """
     Clean and validate the raw data produced by ingestion.load_data().
@@ -93,6 +129,18 @@ def clean_data(data: dict) -> tuple[dict, dict]:
     # ── 7. Fill / coerce navigational_status ─────────────────────────────────
     if "navigational_status" in ais.columns:
         ais["navigational_status"] = ais["navigational_status"].fillna("unknown")
+
+    # ── 7b. Q2 — Normalize status to 3 canonical values ──────────────────────
+    if "status" in ais.columns:
+        ais["status"] = _normalize_status(ais["status"])
+
+    # ── 7c. Q2 — hour_of_day (heure UTC de chaque position AIS, entier 0–23) ──
+    if "timestamp" in ais.columns:
+        hours = pd.to_datetime(ais["timestamp"], utc=True, errors="coerce").dt.hour
+        # Convert to Python int (nullable) — avoid float NaN issues with Supabase INTEGER
+        ais["hour_of_day"] = hours.apply(
+            lambda x: int(x) if pd.notna(x) else None
+        )
 
     # ── 8. Clean behaviors (drop rows without MMSI) ───────────────────────────
     behaviors = behaviors.dropna(subset=["mmsi"])

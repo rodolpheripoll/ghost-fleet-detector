@@ -1,13 +1,8 @@
 import { useState } from 'react'
+import { RiskChip } from './ui/RiskChip'
 
 function RiskBadge({ value }) {
-  const v = value ?? 'Normal'
-  const cls =
-    v === 'Ghost Fleet' ? 'bg-[#ede9fe] text-[#7c3aed]' :
-    v === 'Critical'    ? 'bg-[#fee2e2] text-[#dc2626]' :
-    v === 'Suspect'     ? 'bg-[#fef3c7] text-[#d97706]' :
-                          'bg-[#dcfce7] text-[#16a34a]'
-  return <span className={`px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>{v}</span>
+  return <RiskChip level={value ?? 'Normal'} />
 }
 
 /**
@@ -43,24 +38,26 @@ export default function ShipTable({ ships = [], columns }) {
     return sortDir === 'asc' ? cmp : -cmp
   })
 
+  const MONO_KEYS = new Set(['mmsi','score','latitude','longitude','speed','course','confidence','isolation_score','behavior_score','graph_degree','route_sim_score','zone_score'])
+
   if (!ships.length) {
     return (
-      <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-[#64748b]">
+      <div className="bg-white border border-[#e5ebf2] rounded-[14px] p-8 text-center text-[#64748b]">
         Aucun navire à afficher. Lancez le pipeline Python pour alimenter la base.
       </div>
     )
   }
 
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
-      <table className="w-full text-sm text-[#0f172a]">
-        <thead className="bg-slate-50 text-[#64748b] uppercase text-xs border-b border-slate-200">
-          <tr>
+    <div className="overflow-x-auto rounded-[14px] border border-[#e5ebf2] shadow-card">
+      <table className="w-full text-[13px]">
+        <thead>
+          <tr className="border-b border-[#e5ebf2]">
             {defaultColumns.map(col => (
               <th
                 key={col.key}
                 onClick={() => handleSort(col.key)}
-                className="px-4 py-3 text-left cursor-pointer hover:text-[#0f172a] select-none whitespace-nowrap"
+                className="text-[10.5px] font-bold uppercase tracking-widest text-[#64748b] pb-3 pt-3 px-4 text-left cursor-pointer hover:text-[#1e3a5f] select-none whitespace-nowrap"
               >
                 {col.label}
                 {sortKey === col.key && <span className="ml-1">{sortDir === 'asc' ? '▲' : '▼'}</span>}
@@ -70,12 +67,12 @@ export default function ShipTable({ ships = [], columns }) {
         </thead>
         <tbody className="bg-white">
           {sorted.map((ship, i) => (
-            <tr
-              key={ship.mmsi ?? i}
-              className="border-t border-slate-100 hover:bg-[#f0f9ff] transition-colors"
-            >
+            <tr key={ship.mmsi ?? i} className="border-b border-[#e5ebf2] hover:bg-[#eef2f7] transition-colors">
               {defaultColumns.map(col => (
-                <td key={col.key} className="px-4 py-2.5 whitespace-nowrap">
+                <td
+                  key={col.key}
+                  className={`px-4 py-3 whitespace-nowrap ${MONO_KEYS.has(col.key) ? 'font-mono font-tabular text-[12px]' : ''}`}
+                >
                   {col.render ? col.render(ship[col.key]) : (ship[col.key] ?? 'N/A')}
                 </td>
               ))}

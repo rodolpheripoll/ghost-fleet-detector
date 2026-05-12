@@ -11,3 +11,4 @@ python-dotenv
 geopy
 shapely
 websockets
+h3

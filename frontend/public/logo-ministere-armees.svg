@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 72" width="220" height="72">
+  <rect x="0" y="0" width="10" height="72" fill="#4a7fd4"/>
+  <rect x="10" y="0" width="10" height="72" fill="#ffffff"/>
+  <rect x="20" y="0" width="10" height="72" fill="#f04a5a"/>
+  <text x="38" y="19" font-family="Arial,sans-serif" font-size="7" fill="#94a3b8" letter-spacing="0.8" font-weight="400">LIBERTÉ · ÉGALITÉ · FRATERNITÉ</text>
+  <text x="38" y="40" font-family="Arial,sans-serif" font-size="18" font-weight="700" fill="#ffffff">Ministère</text>
+  <text x="38" y="61" font-family="Arial,sans-serif" font-size="18" font-weight="700" fill="#ffffff">des Armées</text>
+</svg>

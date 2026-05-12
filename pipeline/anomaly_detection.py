@@ -26,13 +26,13 @@ SPEED_THRESHOLD = 25  # knots
 # Source: IMO SOLAS Convention, Chapter V, Regulation 19.2.4
 AIS_OFF_THRESHOLD_HOURS = 2  # hours
 
-# Position-jump threshold: 0.05° ≈ 5.5 km at the equator (1° latitude ~ 111 km).
-# A legitimate ship cannot teleport. Any jump above this between two consecutive
-# AIS signals indicates fake position transmission.
-# Source: physical impossibility — even the fastest naval vessels at 50 knots
-# travel ~1.4 km/min; a 5.5 km jump in one typical AIS interval (< 2 min)
-# is impossible without spoofing.
-POSITION_JUMP_THRESHOLD = 0.05  # degrees (Euclidean approximation)
+# Position-jump threshold: based on implied speed between consecutive AIS signals.
+# A "Fake Position" is flagged only when the distance / time_elapsed implies
+# a speed physically impossible for any commercial vessel (> 60 knots).
+# 60 knots is chosen as a hard ceiling: the fastest warships reach ~55 knots;
+# no commercial vessel exceeds 35 knots.
+# Source: Jane's Fighting Ships; Maersk technical specifications.
+MAX_PLAUSIBLE_SPEED_KN = 60  # knots — absolute physical ceiling
 
 # Contamination rate for Isolation Forest: estimated 5% ghost fleet rate in
 # global AIS data based on industry research.
@@ -48,6 +48,14 @@ COURSE_CHANGE_THRESHOLD_MINS = 10   # minutes
 
 def _euclidean_dist(lat1, lon1, lat2, lon2) -> float:
     return math.sqrt((lat2 - lat1) ** 2 + (lon2 - lon1) ** 2)
+
+
+def _haversine_km(lat1, lon1, lat2, lon2) -> float:
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    return 2 * R * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
 def _angle_diff(a, b) -> float:
@@ -137,24 +145,34 @@ def _rule_based(ais_df: pd.DataFrame, zones_df: pd.DataFrame) -> list[dict]:
                     "detected_by": "rule",
                 })
 
-    # ── Rule 4: Position jump > 0.05° ────────────────────────────────────────
+    # ── Rule 4: Physically impossible position jump ───────────────────────────
+    # Flag only when implied speed between two consecutive AIS points exceeds
+    # MAX_PLAUSIBLE_SPEED_KN (60 kn). Using a fixed distance threshold causes
+    # mass false positives because AIS intervals vary widely (seconds to hours).
     for mmsi_val, group in ais.groupby("mmsi"):
         group = group.reset_index(drop=True)
         for i in range(1, len(group)):
-            dist = _euclidean_dist(
+            dt_hours = (
+                group.loc[i, "timestamp"] - group.loc[i - 1, "timestamp"]
+            ).total_seconds() / 3600
+            if dt_hours <= 0:
+                continue
+            dist_km = _haversine_km(
                 group.loc[i - 1, "latitude"],  group.loc[i - 1, "longitude"],
                 group.loc[i,     "latitude"],  group.loc[i,     "longitude"],
             )
-            if dist > POSITION_JUMP_THRESHOLD:
+            implied_speed_kn = (dist_km / 1.852) / dt_hours
+            if implied_speed_kn > MAX_PLAUSIBLE_SPEED_KN:
                 anomalies.append({
                     "mmsi":        str(mmsi_val),
                     "type":        "Fake Position",
                     "description": (
-                        f"Position jump of {dist:.4f}° (~{dist * 111:.1f} km) "
-                        f"between consecutive signals (threshold: {POSITION_JUMP_THRESHOLD}°)."
+                        f"Implied speed {implied_speed_kn:.0f} kn over {dt_hours:.2f} h "
+                        f"({dist_km:.1f} km) — physically impossible "
+                        f"(ceiling: {MAX_PLAUSIBLE_SPEED_KN} kn)."
                     ),
                     "timestamp":   group.loc[i, "timestamp"],
-                    "confidence":  0.80,
+                    "confidence":  0.90,
                     "detected_by": "rule",
                 })
 
