@@ -1,122 +1,27 @@
 """
 main.py
 Ghost Fleet Detection — Pipeline orchestrator.
-
-Runs TWO scoring pipelines and pushes results to separate Supabase tables:
-  DEMO  pipeline  → rules + Isolation Forest  → table 'ships'
-  GRAPH pipeline  → graph theory scoring       → table 'ships_graph'
-
-SUPABASE TABLES — run these in the Supabase SQL editor before executing:
-
-    CREATE TABLE ships (
-      mmsi         TEXT PRIMARY KEY,
-      timestamp    TIMESTAMPTZ,
-      latitude     FLOAT,
-      longitude    FLOAT,
-      speed        FLOAT,
-      course       FLOAT,
-      status       TEXT,
-      ais_active   BOOLEAN,
-      score        FLOAT   DEFAULT 0,
-      risk_level   TEXT    DEFAULT 'Normal',
-      prior_risk_score FLOAT DEFAULT 0,
-      convoy_id    TEXT,
-      convoy_size  INTEGER DEFAULT 1,
-      convoy_risk  TEXT    DEFAULT 'Normal'
-    );
-
-    CREATE TABLE ships_graph (
-      mmsi              TEXT PRIMARY KEY,
-      timestamp         TIMESTAMPTZ,
-      latitude          FLOAT,
-      longitude         FLOAT,
-      speed             FLOAT,
-      course            FLOAT,
-      status            TEXT,
-      ais_active        BOOLEAN,
-      score             FLOAT DEFAULT 0,
-      risk_level        TEXT  DEFAULT 'Normal',
-      isolation_score   FLOAT DEFAULT 0,
-      behavior_score    FLOAT DEFAULT 0,
-      route_sim_score   FLOAT DEFAULT 0,
-      zone_score        FLOAT DEFAULT 0,
-      graph_degree      INTEGER DEFAULT 0
-    );
-
-    CREATE TABLE anomalies (
-      id           UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-      mmsi         TEXT,
-      type         TEXT,
-      description  TEXT,
-      timestamp    TIMESTAMPTZ,
-      confidence   FLOAT,
-      detected_by  TEXT
-    );
-
-    CREATE TABLE risk_zones (
-      zone_id      TEXT PRIMARY KEY,
-      name         TEXT,
-      lat_min      FLOAT,
-      lat_max      FLOAT,
-      lon_min      FLOAT,
-      lon_max      FLOAT,
-      risk_level   TEXT,
-      description  TEXT
-    );
-
-    CREATE TABLE graph_nodes (
-      id           TEXT PRIMARY KEY,
-      type         TEXT,
-      label        TEXT,
-      score        FLOAT,
-      risk_level   TEXT,
-      centrality   FLOAT
-    );
-
-    CREATE TABLE graph_edges (
-      id           UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-      source       TEXT,
-      target       TEXT,
-      label        TEXT
-    );
-
-    CREATE TABLE convoys (
-      convoy_id    TEXT PRIMARY KEY,
-      size         INTEGER,
-      risk_level   TEXT,
-      avg_score    FLOAT,
-      centroid_lat FLOAT,
-      centroid_lon FLOAT
-    );
-
-    CREATE TABLE convoy_edges (
-      id           UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-      source       TEXT,
-      target       TEXT,
-      distance_km  FLOAT,
-      distance_nm  FLOAT
-    );
+Runs DEMO pipeline (rules + IF) and GRAPH pipeline (graph theory).
 """
 
 import os
-import math
 import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from pipeline.ingestion        import load_data
-from pipeline.cleaning         import clean_data
+from pipeline.ingestion         import load_data
+from pipeline.cleaning          import clean_data
 from pipeline.anomaly_detection import detect_anomalies
-from pipeline.scoring          import compute_scores
-from pipeline.graph_scoring    import compute_graph_scores
-from pipeline.convoy_detection import detect_convoys
-from pipeline.knowledge_graph  import build_graph
-from pipeline.report_generator import generate_pdf_report
+from pipeline.scoring           import compute_scores
+from pipeline.graph_scoring     import compute_graph_scores
+from pipeline.convoy_detection  import detect_convoys
+from pipeline.knowledge_graph   import build_graph
+from pipeline.report_generator  import generate_pdf_report
 
 
 def _serialize(df: pd.DataFrame) -> list[dict]:
-    """Convert a DataFrame to a list of JSON-serialisable dicts for Supabase."""
+    """Convert DataFrame to JSON-serialisable dicts for Supabase."""
     records = df.copy()
     for col in records.columns:
         if pd.api.types.is_datetime64_any_dtype(records[col]):
@@ -132,14 +37,47 @@ def _serialize(df: pd.DataFrame) -> list[dict]:
     return result
 
 
+def _enrich_with_registry(ships_df: pd.DataFrame, registry: pd.DataFrame) -> pd.DataFrame:
+    """
+    Left-join ship registry (ships_large) to enrich ships with name/type/flag.
+    Ships with FAKE- MMSI get flag='FAKE', name='UNKNOWN', type='Unknown'.
+    Ships not in the registry (live-only MMSIs) get fillna defaults.
+    """
+    if registry is None or registry.empty:
+        ships_df["ship_name"] = "UNKNOWN"
+        ships_df["ship_type"] = "Unknown"
+        ships_df["flag"]      = "Unknown"
+        return ships_df
+
+    reg = registry[["mmsi", "name", "type", "flag"]].copy()
+    reg.columns = ["mmsi", "ship_name", "ship_type", "flag"]
+    reg["mmsi"] = reg["mmsi"].astype(str)
+
+    result = ships_df.copy()
+    result["mmsi"] = result["mmsi"].astype(str)
+    result = result.merge(reg, on="mmsi", how="left")
+
+    result["ship_name"] = result["ship_name"].fillna("UNKNOWN")
+    result["ship_type"] = result["ship_type"].fillna("Unknown")
+    result["flag"]      = result["flag"].fillna("Unknown")
+
+    # FAKE- MMSIs have no real registry entry
+    fake_mask = result["mmsi"].str.startswith("FAKE-")
+    result.loc[fake_mask, "flag"]      = "FAKE"
+    result.loc[fake_mask, "ship_name"] = "UNKNOWN"
+
+    return result
+
+
 def push_demo_pipeline(supabase, scored, anomalies, zones, nodes, edges,
-                       convoy_stats, convoy_edges):
-    """Push DEMO pipeline results to Supabase (table: ships)."""
+                       convoy_stats, convoy_edges, alerts_df=None):
+    """Push DEMO pipeline results to Supabase."""
     ships_cols = [
         "mmsi", "timestamp", "latitude", "longitude",
         "speed", "course", "status", "ais_active",
         "score", "risk_level", "prior_risk_score",
         "convoy_id", "convoy_size", "convoy_risk",
+        "ship_name", "ship_type", "flag",
     ]
     available  = [c for c in ships_cols if c in scored.columns]
     ships_data = (
@@ -176,6 +114,13 @@ def push_demo_pipeline(supabase, scored, anomalies, zones, nodes, edges,
         supabase.table("convoy_edges").insert(_serialize(convoy_edges)).execute()
         print(f"  [Supabase] convoy_edges  -> {len(convoy_edges)} rows inserted")
 
+    if alerts_df is not None and not alerts_df.empty:
+        alert_cols = ["alert_id", "mmsi", "type", "description",
+                      "timestamp", "severity", "status", "assigned_to", "resolution"]
+        avail_a = [c for c in alert_cols if c in alerts_df.columns]
+        supabase.table("alerts").upsert(_serialize(alerts_df[avail_a])).execute()
+        print(f"  [Supabase] alerts        -> {len(alerts_df)} rows upserted")
+
     print("  [Supabase] DEMO pipeline pushed successfully.")
 
 
@@ -188,7 +133,7 @@ def push_graph_pipeline(supabase, graph_scored):
         "isolation_score", "behavior_score", "route_sim_score",
         "zone_score", "graph_degree",
     ]
-    available = [c for c in graph_cols if c in graph_scored.columns]
+    available  = [c for c in graph_cols if c in graph_scored.columns]
     ships_data = (
         graph_scored[available]
         .sort_values("timestamp")
@@ -210,7 +155,7 @@ if __name__ == "__main__":
     # 2. Clean
     clean, quality_report = clean_data(data)
 
-    # ── DEMO PIPELINE (rules + Isolation Forest) ──────────────────────────────
+    # ── DEMO PIPELINE ─────────────────────────────────────────────────────────
     print("\n── DEMO PIPELINE (rules + Isolation Forest) ──")
     anomalies = detect_anomalies(
         clean["ais"], clean["zones"],
@@ -222,15 +167,19 @@ if __name__ == "__main__":
         ships_df=clean.get("ships")
     )
     _convoy_graph, ships_convoys, convoy_stats, convoy_edges = detect_convoys(scored)
+
+    # Enrich with registry (name / type / flag)
+    ships_convoys = _enrich_with_registry(ships_convoys, clean.get("ships"))
+
     graph, nodes, edges = build_graph(ships_convoys, anomalies, clean["zones"])
     generate_pdf_report(ships_convoys, anomalies, quality_report)
 
-    # ── GRAPH PIPELINE (graph theory scoring) ─────────────────────────────────
+    # ── GRAPH PIPELINE ────────────────────────────────────────────────────────
     print("\n── GRAPH PIPELINE (graph theory scoring) ──")
     graph_scored, proximity_graph, graph_metrics = compute_graph_scores(
         clean["ais"],
         anomalies,
-        clean.get("alerts", pd.DataFrame()),
+        clean.get("alerts",    pd.DataFrame()),
         clean.get("behaviors", pd.DataFrame()),
         clean["zones"],
     )
@@ -244,8 +193,11 @@ if __name__ == "__main__":
         from supabase import create_client
         sb = create_client(url, key)
         print("\n── PUSHING TO SUPABASE ──")
-        push_demo_pipeline(sb, ships_convoys, anomalies, clean["zones"],
-                           nodes, edges, convoy_stats, convoy_edges)
+        push_demo_pipeline(
+            sb, ships_convoys, anomalies, clean["zones"],
+            nodes, edges, convoy_stats, convoy_edges,
+            alerts_df=clean.get("alerts"),
+        )
         push_graph_pipeline(sb, graph_scored)
 
     print("\n" + "=" * 60)
