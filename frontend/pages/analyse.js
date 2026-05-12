@@ -107,26 +107,6 @@ export default function AnalysePage() {
     }))
   }, [anomalies])
 
-  // Temporal heatmap : AIS off by hour × day
-  const heatmapData = useMemo(() => {
-    const matrix = Array.from({ length: 7 }, () => Array(24).fill(0))
-    anomalies.filter(a => a.type === 'AIS Disabled' && a.timestamp).forEach(a => {
-      const d = new Date(a.timestamp)
-      matrix[d.getDay()][d.getHours()]++
-    })
-    return matrix
-  }, [anomalies])
-
-  const heatmapTrace = [{
-    type: 'heatmap',
-    x: Array.from({ length: 24 }, (_, i) => `${i}h`),
-    y: DAYS,
-    z: heatmapData,
-    colorscale: 'YlOrRd',
-    hovertemplate: '%{y} %{x}<br>%{z} coupures AIS<extra></extra>',
-  }]
-
-  // Radar chart : Ghost Fleet vs Normal anomaly profile
   const radarData = useMemo(() => {
     const anomByMmsi = {}
     anomalies.forEach(a => {
@@ -369,15 +349,8 @@ export default function AnalysePage() {
             </div>
           </div>
 
-          {/* Row 3: heatmap AIS + radar */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
-              <Plot data={heatmapTrace}
-                layout={{ ...CHART_LAYOUT('Heatmap — Coupures AIS par heure × jour'),
-                  xaxis: { ...CHART_LAYOUT('').xaxis, title: 'Heure' },
-                  yaxis: { ...CHART_LAYOUT('').yaxis, title: 'Jour' } }}
-                config={CONF} style={{ width: '100%' }} />
-            </div>
+          {/* Row 3: radar */}
+          <div className="mb-6">
             <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
               <Plot data={radarData}
                 layout={{ ...CHART_LAYOUT('Profil anomalie — Ghost Fleet vs Normal'),
