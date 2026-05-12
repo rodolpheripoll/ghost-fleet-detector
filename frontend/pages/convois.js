@@ -1,6 +1,9 @@
 import { useEffect, useState, useContext } from 'react'
+import dynamic from 'next/dynamic'
 import { supabase, ModeContext } from '../lib/supabase'
 import RiskChip from '../components/RiskChip'
+
+const ConvoisMap = dynamic(() => import('../components/ConvoisMap'), { ssr: false })
 
 function getRiskColor(level) {
   if (level === 'Ghost Fleet') return '#7f1d1d'
@@ -9,21 +12,12 @@ function getRiskColor(level) {
   return '#22c55e'
 }
 
-// Generate a deterministic mini route SVG path from convoy centroid
-function routePath(lat, lon) {
-  const x1 = 30
-  const y1 = 60 + (lat % 40)
-  const mx = 160
-  const my = 40 + ((lon ?? 0) % 40)
-  const x2 = 290
-  const y2 = 35 + (lat % 30)
-  return `M${x1} ${y1} Q ${mx} ${my} ${x2} ${y2}`
-}
-
 export default function Convois() {
-  const { mode }                = useContext(ModeContext)
-  const [convoys,  setConvoys]  = useState([])
-  const [loading,  setLoading]  = useState(true)
+  const { mode }                      = useContext(ModeContext)
+  const [convoys,    setConvoys]      = useState([])
+  const [loading,    setLoading]      = useState(true)
+  const [selectedId, setSelectedId]  = useState(null)
+  const [riskFilter, setRiskFilter]  = useState('all')
 
   useEffect(() => {
     setLoading(true)
@@ -36,7 +30,12 @@ export default function Convois() {
       .finally(() => setLoading(false))
   }, [])
 
-  const multiShip    = convoys.filter(c => c.size > 1)
+  const filtered = riskFilter === 'all'
+    ? convoys
+    : convoys.filter(c => c.risk_level === riskFilter)
+
+  const selected = convoys.find(c => c.convoy_id === selectedId)
+  const multiShip    = convoys.filter(c => (c.size ?? 1) > 1)
   const ghostConvois = convoys.filter(c => c.risk_level === 'Ghost Fleet').length
   const critConvois  = convoys.filter(c => c.risk_level === 'Critical').length
   const suspConvois  = convoys.filter(c => c.risk_level === 'Suspect').length
@@ -45,169 +44,164 @@ export default function Convois() {
     ? (convoys.reduce((a, c) => a + (c.avg_score ?? 0), 0) / convoys.length).toFixed(2)
     : '—'
 
-  // Top 6 multi-ship convoys for the card grid
-  const topConvoys = multiShip.slice(0, 6)
-  // Remaining shown as compact rows
-  const restConvoys = multiShip.slice(6, 13)
-
   return (
-    <main className="px-8 py-7">
-      {/* Page header */}
-      <section className="flex items-end justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2 text-[12px] mb-2" style={{ color: 'var(--muted)' }}>
-            <span>Renseignement maritime</span>
-            <span style={{ color: 'var(--line)' }}>/</span>
-            <span className="font-semibold" style={{ color: 'var(--ink-2)' }}>Convois</span>
-          </div>
-          <h1 className="text-[26px] font-bold tracking-tight" style={{ color: 'var(--ink)' }}>
-            Détection de convois — groupes de navires
-          </h1>
-          <div className="text-[13.5px] mt-1" style={{ color: 'var(--muted)' }}>
-            Regroupements détectés par similarité de route, proximité spatio-temporelle et co-occurrence portuaire — fenêtre 7 j.
-          </div>
-        </div>
-        <div className="flex items-center gap-2.5">
-          {[{ label: 'Niveau', value: 'Tous' }, { label: 'Taille', value: '≥ 2' }].map(({ label, value }) => (
-            <div key={label} className="flex items-center gap-1.5 text-[12px] rounded-lg px-2.5 py-1.5 border"
-              style={{ background: 'var(--paper)', borderColor: 'var(--line)' }}>
-              <span style={{ color: 'var(--muted)' }}>{label}</span>
-              <span className="font-semibold">{value}</span>
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6"/></svg>
-            </div>
-          ))}
-          <button className="text-[13px] font-semibold px-3.5 py-2 rounded-lg border"
-            style={{ borderColor: 'var(--line)', background: 'var(--paper)' }}>
-            Exporter CSV
-          </button>
-        </div>
-      </section>
+    <main className="flex" style={{ height: 'calc(100vh - 64px)', minHeight: 700 }}>
 
-      {/* KPI cards */}
-      <section className="grid grid-cols-4 gap-5 mb-6">
-        <div className="card p-5">
-          <div className="text-[11px] uppercase font-semibold tracking-wide" style={{ color: 'var(--muted)' }}>Convois détectés</div>
-          <div className="mono text-[28px] font-extrabold mt-1">{convoys.length.toLocaleString('fr-FR')}</div>
-          <div className="text-[11.5px] mt-1" style={{ color: 'var(--muted)' }}>{multiShip.length} groupes · {totalShips.toLocaleString('fr-FR')} navires</div>
-        </div>
-        <div className="card p-5">
-          <div className="text-[11px] uppercase font-semibold tracking-wide" style={{ color: 'var(--muted)' }}>Convois Ghost Fleet</div>
-          <div className="mono text-[28px] font-extrabold mt-1" style={{ color: '#7f1d1d' }}>{ghostConvois}</div>
-          <div className="text-[11.5px] mt-1" style={{ color: 'var(--muted)' }}>{critConvois} Critical · {suspConvois} Suspect</div>
-        </div>
-        <div className="card p-5">
-          <div className="text-[11px] uppercase font-semibold tracking-wide" style={{ color: 'var(--muted)' }}>Navires impliqués</div>
-          <div className="mono text-[28px] font-extrabold mt-1">{totalShips.toLocaleString('fr-FR')}</div>
-          <div className="text-[11.5px] mt-1" style={{ color: 'var(--muted)' }}>tous niveaux de risque</div>
-        </div>
-        <div className="card p-5">
-          <div className="text-[11px] uppercase font-semibold tracking-wide" style={{ color: 'var(--muted)' }}>Score moyen convoi</div>
-          <div className="mono text-[28px] font-extrabold mt-1">{avgScore}</div>
-          <div className="text-[11.5px] mt-1" style={{ color: 'var(--muted)' }}>index de risque agrégé</div>
-        </div>
-      </section>
+      {/* LEFT PANEL */}
+      <aside className="shrink-0 bg-white border-r flex flex-col" style={{ width: 320, borderColor: 'var(--line)' }}>
 
-      {loading ? (
-        <div className="text-[13px] animate-pulse" style={{ color: 'var(--muted)' }}>Chargement des convois…</div>
-      ) : (
-        <>
-          {/* Convoy cards grid */}
-          <section className="grid grid-cols-3 gap-5">
-            {topConvoys.map((convoy, idx) => {
-              const color = getRiskColor(convoy.risk_level)
-              const path  = routePath(convoy.centroid_lat ?? 0, convoy.centroid_lon ?? 0)
+        {/* Header */}
+        <div className="px-5 py-5 border-b" style={{ borderColor: 'var(--line)' }}>
+          <div className="text-[11px] font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--muted)' }}>
+            Renseignement maritime / Convois
+          </div>
+          <h1 className="text-[18px] font-bold tracking-tight">Groupes de navires suspects</h1>
+          <div className="text-[11.5px] mt-1" style={{ color: 'var(--muted)' }}>
+            Regroupements détectés par similarité de route et proximité spatio-temporelle.
+          </div>
+        </div>
+
+        {/* KPIs */}
+        <div className="grid grid-cols-2 gap-3 px-5 py-4 border-b" style={{ borderColor: 'var(--line)' }}>
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line)' }}>
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--muted)' }}>Convois</div>
+            <div className="mono text-[20px] font-extrabold mt-0.5">{convoys.length}</div>
+          </div>
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line)' }}>
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--muted)' }}>Navires</div>
+            <div className="mono text-[20px] font-extrabold mt-0.5">{totalShips.toLocaleString('fr-FR')}</div>
+          </div>
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line)' }}>
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--muted)' }}>Ghost Fleet</div>
+            <div className="mono text-[20px] font-extrabold mt-0.5" style={{ color: '#7f1d1d' }}>{ghostConvois}</div>
+          </div>
+          <div className="rounded-lg border p-3" style={{ borderColor: 'var(--line)' }}>
+            <div className="text-[10px] uppercase tracking-wide" style={{ color: 'var(--muted)' }}>Score moy.</div>
+            <div className="mono text-[20px] font-extrabold mt-0.5">{avgScore}</div>
+          </div>
+        </div>
+
+        {/* Risk filter */}
+        <div className="px-5 py-4 border-b" style={{ borderColor: 'var(--line)' }}>
+          <div className="text-[11px] font-bold uppercase tracking-wide mb-2" style={{ color: 'var(--ink-2)' }}>Filtrer</div>
+          <div className="flex flex-wrap gap-1.5">
+            {['all', 'Ghost Fleet', 'Critical', 'Suspect', 'Normal'].map(level => (
+              <button key={level}
+                onClick={() => setRiskFilter(level)}
+                className="text-[11px] font-semibold px-2.5 py-1 rounded-md border"
+                style={{
+                  borderColor: riskFilter === level ? 'var(--navy)' : 'var(--line)',
+                  background: riskFilter === level ? '#f5f8fd' : 'var(--paper)',
+                  color: riskFilter === level ? 'var(--navy)' : 'var(--muted)',
+                }}>
+                {level === 'all' ? 'Tous' : level}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Convoy list */}
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="px-5 py-4 text-[12px] animate-pulse" style={{ color: 'var(--muted)' }}>Chargement…</div>
+          ) : (
+            filtered.slice(0, 50).map((convoy, idx) => {
+              const color    = getRiskColor(convoy.risk_level)
+              const isActive = convoy.convoy_id === selectedId
               return (
-                <div key={convoy.convoy_id} className={`card convoy-card p-5 flex flex-col${idx === 0 ? ' selected' : ''}`}>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="mono text-[10.5px]" style={{ color: 'var(--muted)' }}>{convoy.convoy_id}</div>
-                      <h3 className="text-[17px] font-bold tracking-tight mt-0.5">
-                        Convoi {String(idx + 1).padStart(2, '0')}
-                      </h3>
-                    </div>
+                <button key={convoy.convoy_id} onClick={() => setSelectedId(convoy.convoy_id)}
+                  className="w-full text-left px-5 py-3.5 border-b hover:bg-[var(--line-2)]"
+                  style={{
+                    borderColor: 'var(--line-2)',
+                    background: isActive ? '#f5f8fd' : 'transparent',
+                    borderLeft: isActive ? `3px solid ${color}` : '3px solid transparent',
+                  }}>
+                  <div className="flex items-center justify-between">
+                    <div className="mono text-[10.5px]" style={{ color: 'var(--muted)' }}>{convoy.convoy_id}</div>
                     <RiskChip level={convoy.risk_level ?? 'Normal'} />
                   </div>
-                  <div className="text-[12.5px] mt-1" style={{ color: 'var(--muted)' }}>
-                    {convoy.centroid_lat?.toFixed(2)}° N · {convoy.centroid_lon?.toFixed(2)}° E
+                  <div className="text-[13px] font-semibold mt-0.5">
+                    Convoi {String(idx + 1).padStart(2, '0')} — {convoy.size ?? 1} navire{(convoy.size ?? 1) > 1 ? 's' : ''}
                   </div>
-
-                  {/* Mini route SVG */}
-                  <svg viewBox="0 0 320 120" className="w-full mt-3 rounded-lg"
-                    style={{ background: 'linear-gradient(180deg,#eaf1fb,#dde7f3)' }}>
-                    <path d={path} fill="none" stroke={color} strokeWidth="2" strokeDasharray="5 3"/>
-                    <circle cx="30"  cy={parseInt(path.match(/M\d+ (\d+)/)?.[1] ?? 60)} r="5" fill={color}/>
-                    <circle cx="290" cy={parseInt(path.match(/(\d+)$/)?.[1] ?? 35)} r="5" fill={color}/>
-                    <text x="22"  y="115" fontFamily="JetBrains Mono" fontSize="9" fill="#475569">
-                      {convoy.centroid_lat?.toFixed(1)}°N
-                    </text>
-                    <text x="255" y="22" fontFamily="JetBrains Mono" fontSize="9" fill="#475569">
-                      {convoy.centroid_lon?.toFixed(1)}°E
-                    </text>
-                  </svg>
-
-                  <div className="grid grid-cols-3 gap-2 mt-3 text-center text-[11px]">
-                    <div className="rounded-md py-1.5" style={{ background: 'var(--line-2)' }}>
-                      <div style={{ color: 'var(--muted)' }}>Navires</div>
-                      <div className="mono font-bold text-[13px]">{convoy.size}</div>
-                    </div>
-                    <div className="rounded-md py-1.5" style={{ background: 'var(--line-2)' }}>
-                      <div style={{ color: 'var(--muted)' }}>Score</div>
-                      <div className="mono font-bold text-[13px]">{(convoy.avg_score ?? 0).toFixed(2)}</div>
-                    </div>
-                    <div className="rounded-md py-1.5" style={{ background: 'var(--line-2)' }}>
-                      <div style={{ color: 'var(--muted)' }}>Niveau</div>
-                      <div className="mono font-bold text-[13px]" style={{ color }}>{convoy.risk_level?.split(' ')[0] ?? '—'}</div>
-                    </div>
+                  <div className="text-[11.5px] mt-0.5" style={{ color: 'var(--muted)' }}>
+                    {convoy.centroid_lat?.toFixed(2)}°N · {convoy.centroid_lon?.toFixed(2)}°E · score {(convoy.avg_score ?? 0).toFixed(2)}
                   </div>
-
-                  <div className="mt-4 pt-4 border-t flex items-center justify-between text-[11.5px]" style={{ borderColor: 'var(--line)' }}>
-                    <span style={{ color: 'var(--muted)' }}>
-                      {convoy.size} membre{convoy.size > 1 ? 's' : ''} · score <span className="font-bold mono" style={{ color: 'var(--ink)' }}>{(convoy.avg_score ?? 0).toFixed(2)}</span>
-                    </span>
-                    <button className="font-semibold hover:underline" style={{ color: 'var(--navy)' }}>Analyser →</button>
-                  </div>
-                </div>
+                </button>
               )
-            })}
-          </section>
+            })
+          )}
+        </div>
+      </aside>
 
-          {/* Remaining convoys as compact rows */}
-          {restConvoys.map(convoy => (
-            <section key={convoy.convoy_id} className="card mt-4 p-5 flex items-center justify-between">
-              <div className="flex items-center gap-5">
-                <div className="mono text-[10.5px]" style={{ color: 'var(--muted)' }}>{convoy.convoy_id}</div>
-                <div>
-                  <div className="text-[15px] font-bold">
-                    Convoi — {convoy.centroid_lat?.toFixed(1)}°N · {convoy.centroid_lon?.toFixed(1)}°E
-                  </div>
-                  <div className="text-[12px]" style={{ color: 'var(--muted)' }}>
-                    {convoy.size} navires · score {(convoy.avg_score ?? 0).toFixed(2)}
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <RiskChip level={convoy.risk_level ?? 'Normal'} />
-                <button className="text-[12px] font-semibold border rounded-lg px-3 py-1.5"
-                  style={{ borderColor: 'var(--line)', background: 'var(--paper)' }}>Voir →</button>
-              </div>
-            </section>
-          ))}
+      {/* MAP + detail */}
+      <section className="flex-1 flex flex-col">
+        {/* Top stats bar */}
+        <div className="flex items-center gap-6 px-6 py-3 border-b text-[12px] bg-white" style={{ borderColor: 'var(--line)' }}>
+          <span className="font-semibold" style={{ color: 'var(--ink-2)' }}>
+            {filtered.length} convoi{filtered.length > 1 ? 's' : ''} affichés
+          </span>
+          <span style={{ color: 'var(--muted)' }}>·</span>
+          <span>{totalShips.toLocaleString('fr-FR')} navires impliqués</span>
+          <span style={{ color: 'var(--muted)' }}>·</span>
+          <span style={{ color: '#7f1d1d' }}>{ghostConvois} Ghost Fleet</span>
+          <span style={{ color: '#ef4444' }}>{critConvois} Critical</span>
+          <span style={{ color: '#f97316' }}>{suspConvois} Suspect</span>
+          <span className="ml-auto mono text-[11px]" style={{ color: 'var(--muted)' }}>GRAPH mode · convois actifs</span>
+        </div>
 
-          {multiShip.length > 13 && (
-            <div className="mt-4 text-center text-[12px]" style={{ color: 'var(--muted)' }}>
-              + {(multiShip.length - 13).toLocaleString('fr-FR')} convois supplémentaires
-            </div>
+        {/* Map */}
+        <div className="flex-1 relative">
+          {!loading && (
+            <ConvoisMap
+              convoys={filtered}
+              selectedId={selectedId}
+              onSelect={id => setSelectedId(id === selectedId ? null : id)}
+            />
           )}
 
-          {/* Footer */}
-          <div className="mt-8 text-[11.5px] flex items-center justify-between" style={{ color: 'var(--muted)' }}>
-            <div>Ministère des Armées · DRM · Cellule Ghost Fleet</div>
-            <div className="flex items-center gap-4">
-              <span>Diffusion restreinte</span><span>·</span><span>Build 2.4.1</span><span>·</span><span>© RF 2026</span>
+          {/* Selected convoy detail overlay */}
+          {selected && (
+            <div className="absolute top-4 right-4 z-[1000] bg-white rounded-xl shadow-lg border p-5"
+              style={{ borderColor: 'var(--line)', width: 260 }}>
+              <div className="flex items-start justify-between mb-3">
+                <div>
+                  <div className="mono text-[10px]" style={{ color: 'var(--muted)' }}>{selected.convoy_id}</div>
+                  <div className="text-[16px] font-bold mt-0.5">Détail du convoi</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <RiskChip level={selected.risk_level ?? 'Normal'} />
+                  <button onClick={() => setSelectedId(null)} className="text-[12px] font-semibold px-2 py-1 rounded-md border"
+                    style={{ borderColor: 'var(--line)', color: 'var(--muted)' }}>×</button>
+                </div>
+              </div>
+              <div className="space-y-2 text-[12.5px]">
+                {[
+                  { label: 'Navires', value: selected.size ?? 1 },
+                  { label: 'Score moyen', value: (selected.avg_score ?? 0).toFixed(3) },
+                  { label: 'Latitude', value: `${selected.centroid_lat?.toFixed(4)}°N` },
+                  { label: 'Longitude', value: `${selected.centroid_lon?.toFixed(4)}°E` },
+                ].map(({ label, value }) => (
+                  <div key={label} className="flex items-center justify-between">
+                    <span style={{ color: 'var(--muted)' }}>{label}</span>
+                    <span className="mono font-semibold">{value}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--line)' }}>
+                <div className="meter">
+                  <div style={{
+                    width: `${Math.round((selected.avg_score ?? 0) * 100)}%`,
+                    background: getRiskColor(selected.risk_level),
+                  }} />
+                </div>
+                <div className="text-[10.5px] mt-1" style={{ color: 'var(--muted)' }}>
+                  Score composite {((selected.avg_score ?? 0) * 100).toFixed(0)}%
+                </div>
+              </div>
             </div>
-          </div>
-        </>
-      )}
+          )}
+        </div>
+      </section>
     </main>
   )
 }

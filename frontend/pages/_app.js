@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import '../styles/globals.css'
+import 'leaflet/dist/leaflet.css'
 import Navbar from '../components/Navbar'
 import { ModeContext } from '../lib/supabase'
 

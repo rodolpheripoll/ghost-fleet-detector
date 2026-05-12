@@ -4,12 +4,12 @@ import { useContext } from 'react'
 import { ModeContext } from '../lib/supabase'
 
 const LINKS = [
-  { href: '/',        label: 'Dashboard'  },
-  { href: '/carte',   label: 'Carte 3D'   },
-  { href: '/analyse', label: 'Analyse ML' },
-  { href: '/graphe',  label: 'Graphe'     },
-  { href: '/convois', label: 'Convois'    },
-  { href: '/rapport', label: 'Rapport'    },
+  { href: '/',        label: 'Dashboard',  graphOnly: false },
+  { href: '/carte',   label: 'Carte 2D',   graphOnly: false },
+  { href: '/analyse', label: 'Analyse ML', graphOnly: false },
+  { href: '/graphe',  label: 'Graphe',     graphOnly: false },
+  { href: '/convois', label: 'Convois',    graphOnly: true  },
+  { href: '/rapport', label: 'Rapport',    graphOnly: false },
 ]
 
 export default function Navbar() {
@@ -31,7 +31,7 @@ export default function Navbar() {
 
         {/* Nav links */}
         <nav className="flex items-center gap-1">
-          {LINKS.map(({ href, label }) => (
+          {LINKS.filter(l => !l.graphOnly || mode === 'graph').map(({ href, label }) => (
             <Link key={href} href={href} className={`nav-link${router.pathname === href ? ' active' : ''}`}>
               {label}
             </Link>

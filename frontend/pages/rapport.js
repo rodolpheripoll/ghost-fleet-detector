@@ -1,6 +1,251 @@
 import { useEffect, useState, useContext } from 'react'
 import { supabase, ModeContext } from '../lib/supabase'
 
+async function generatePDF(ships, classification) {
+  const { jsPDF } = await import('jspdf')
+  const { default: autoTable } = await import('jspdf-autotable')
+
+  // Fetch extra data for the report
+  const [{ data: convoys }, { data: anomalies }, { data: alerts }] = await Promise.all([
+    supabase.from('convoys').select('*').order('avg_score', { ascending: false }).limit(20),
+    supabase.from('anomalies').select('*').limit(500),
+    supabase.from('alerts').select('*').eq('status', 'Open').limit(50),
+  ])
+
+  const allShips     = ships
+  const ghostCount   = allShips.filter(s => (s.score ?? 0) >= 0.68).length
+  const critCount    = allShips.filter(s => (s.score ?? 0) >= 0.44).length
+  const suspCount    = allShips.filter(s => (s.score ?? 0) >= 0.19).length
+  const fakeCount    = allShips.filter(s => String(s.mmsi).startsWith('FAKE-')).length
+  const openAlerts   = alerts?.length ?? 0
+
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+  const W = 210, H = 297
+  const navy = [30, 58, 95], red = [127, 29, 29], orange = [239, 68, 68]
+  const gray = [100, 116, 139], lightgray = [241, 245, 249]
+  const totalPages = 4
+
+  function addFooter(page) {
+    doc.setDrawColor(...lightgray)
+    doc.setLineWidth(0.3)
+    doc.line(15, H - 14, W - 15, H - 14)
+    doc.setFontSize(7.5)
+    doc.setTextColor(...gray)
+    doc.text('Ghost Fleet Detector — Ministère des Armées — DRM', 15, H - 9)
+    doc.text(`${classification}`, W / 2, H - 9, { align: 'center' })
+    doc.text(`Page ${page}/${totalPages}`, W - 15, H - 9, { align: 'right' })
+  }
+
+  function addHeader(title) {
+    doc.setFillColor(15, 23, 42)
+    doc.rect(0, 0, W, 16, 'F')
+    doc.setFillColor(200, 0, 0)
+    doc.rect(0, 16, W / 3, 1.5, 'F')
+    doc.setFillColor(255, 255, 255)
+    doc.rect(W / 3, 16, W / 3, 1.5, 'F')
+    doc.setFillColor(0, 40, 100)
+    doc.rect((W * 2) / 3, 16, W / 3, 1.5, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(8)
+    doc.text('MINISTÈRE DES ARMÉES · DRM · CELLULE GHOST FLEET', 15, 10)
+    doc.text(new Date().toLocaleString('fr-FR'), W - 15, 10, { align: 'right' })
+    doc.setFontSize(11)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(...navy)
+    doc.text(title, 15, 28)
+    doc.setFont('helvetica', 'normal')
+  }
+
+  // ─── PAGE 1: Cover + KPIs ────────────────────────────────────────────────
+  doc.setFillColor(...lightgray)
+  doc.rect(0, 0, W, H, 'F')
+  doc.setFillColor(15, 23, 42)
+  doc.rect(0, 0, W, 60, 'F')
+  doc.setFillColor(200, 0, 0); doc.rect(0, 60, W / 3, 2, 'F')
+  doc.setFillColor(255, 255, 255); doc.rect(W / 3, 60, W / 3, 2, 'F')
+  doc.setFillColor(0, 40, 100); doc.rect((W * 2) / 3, 60, W / 3, 2, 'F')
+  doc.setTextColor(180, 200, 220)
+  doc.setFontSize(8)
+  doc.text('MINISTÈRE DES ARMÉES · DRM · CELLULE GHOST FLEET', 15, 15)
+  doc.setTextColor(255, 255, 255)
+  doc.setFontSize(7)
+  doc.text(classification.toUpperCase(), 15, 22)
+  doc.setFontSize(22)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Détection de la flotte fantôme', 15, 38)
+  doc.setFontSize(12)
+  doc.setFont('helvetica', 'normal')
+  doc.setTextColor(180, 200, 220)
+  doc.text(`Rapport hebdomadaire — ${new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })}`, 15, 46)
+  doc.setTextColor(130, 150, 180)
+  doc.text(`N° RPT-2026-W${String(Math.ceil(new Date().getMonth() * 4.33)).padStart(2, '0')}`, 15, 54)
+
+  // KPI boxes
+  const kpis = [
+    { label: 'Navires analysés', value: allShips.length.toLocaleString('fr-FR'), color: navy },
+    { label: 'Ghost Fleet', value: String(ghostCount), color: red },
+    { label: 'Critical', value: String(critCount), color: orange },
+    { label: 'FAKE-MMSI', value: String(fakeCount), color: [168, 85, 247] },
+    { label: 'Anomalies', value: String(anomalies?.length ?? 0), color: [249, 115, 22] },
+    { label: 'Alertes ouvertes', value: String(openAlerts), color: orange },
+  ]
+  const boxW = (W - 30 - 10) / 3, boxH = 24
+  kpis.forEach((kpi, i) => {
+    const col = i % 3, row = Math.floor(i / 3)
+    const x = 15 + col * (boxW + 5), y = 70 + row * (boxH + 4)
+    doc.setFillColor(255, 255, 255)
+    doc.roundedRect(x, y, boxW, boxH, 2, 2, 'F')
+    doc.setDrawColor(...kpi.color)
+    doc.setLineWidth(0.5)
+    doc.line(x + 2, y, x + 2, y + boxH)
+    doc.setFontSize(7)
+    doc.setTextColor(...gray)
+    doc.text(kpi.label.toUpperCase(), x + 6, y + 7)
+    doc.setFontSize(14)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(...kpi.color)
+    doc.text(kpi.value, x + 6, y + 18)
+    doc.setFont('helvetica', 'normal')
+  })
+
+  // Executive summary
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(...navy)
+  doc.text('1 · Synthèse exécutive', 15, 130)
+  doc.setFont('helvetica', 'normal')
+  doc.setTextColor(51, 65, 85)
+  doc.setFontSize(8.5)
+  const summary = `Sur la période analysée, le système Ghost Fleet Detector a traité ${allShips.length.toLocaleString('fr-FR')} navires à partir des flux AIS. ${ghostCount} unités présentent un score d'anomalie supérieur à 0.68 et sont classées Ghost Fleet. ${critCount} navires sont en état Critical (score ≥ 0.44) et ${suspCount} en état Suspect. ${fakeCount} navires présentent un MMSI commençant par FAKE-, indiquant une usurpation d'identité maritime. ${openAlerts} alertes restent ouvertes nécessitant une action opérationnelle.`
+  const lines = doc.splitTextToSize(summary, W - 30)
+  doc.text(lines, 15, 138)
+
+  // Methodology table
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(...navy)
+  doc.text('2 · Méthodologie de scoring', 15, 168)
+  autoTable(doc, {
+    startY: 172,
+    head: [['Type d\'anomalie', 'Poids', 'Référence']],
+    body: [
+      ['AIS Disabled',   '0.30', 'SOLAS Chapter V'],
+      ['MMSI Spoofing',  '0.25', 'IMO Circ.289'],
+      ['Speed Anomaly',  '0.20', 'Manipulation AIS'],
+      ['Name Change',    '0.18', 'ONU S/2023/171'],
+      ['Fake Position',  '0.15', 'Glitch GPS / délibéré'],
+      ['ML Anomaly',     '0.12', 'Isolation Forest'],
+      ['Zone Crossing',  '0.10', 'Zone à risque'],
+      ['Course Anomaly', '0.08', 'IMO COLREGS Rule 8'],
+    ],
+    styles: { fontSize: 7.5, cellPadding: 2.5 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: { 0: { fontStyle: 'bold' }, 1: { halign: 'center' } },
+    margin: { left: 15, right: 15 },
+  })
+
+  addFooter(1)
+
+  // ─── PAGE 2: Top 20 suspects table ────────────────────────────────────────
+  doc.addPage()
+  addHeader('Top 20 — navires les plus suspects')
+  const top20 = allShips.slice(0, 20)
+  autoTable(doc, {
+    startY: 35,
+    head: [['#', 'MMSI', 'Navire', 'Pavillon', 'Score', 'Niveau']],
+    body: top20.map((s, i) => [
+      String(i + 1).padStart(2, '0'),
+      s.mmsi,
+      s.ship_name || s.name || 'INCONNU',
+      s.flag || '—',
+      (s.score ?? 0).toFixed(3),
+      s.risk_level || 'Normal',
+    ]),
+    styles: { fontSize: 7.5, cellPadding: 2.5 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 10 },
+      3: { cellWidth: 18 },
+      4: { halign: 'right', cellWidth: 18 },
+      5: { cellWidth: 22 },
+    },
+    didParseCell(data) {
+      if (data.column.index === 5 && data.section === 'body') {
+        const val = data.cell.raw
+        if (val === 'Ghost Fleet') data.cell.styles.textColor = red
+        else if (val === 'Critical') data.cell.styles.textColor = orange
+        else if (val === 'Suspect') data.cell.styles.textColor = [249, 115, 22]
+      }
+    },
+    margin: { left: 15, right: 15 },
+  })
+  addFooter(2)
+
+  // ─── PAGE 3: Convoys ──────────────────────────────────────────────────────
+  doc.addPage()
+  addHeader('Convois détectés — groupes de navires')
+  if (convoys && convoys.length > 0) {
+    autoTable(doc, {
+      startY: 35,
+      head: [['Convoy ID', 'Taille', 'Score moy.', 'Niveau', 'Lat', 'Lon']],
+      body: convoys.slice(0, 20).map(c => [
+        c.convoy_id,
+        String(c.size ?? 1),
+        (c.avg_score ?? 0).toFixed(3),
+        c.risk_level || 'Normal',
+        c.centroid_lat?.toFixed(3) ?? '—',
+        c.centroid_lon?.toFixed(3) ?? '—',
+      ]),
+      styles: { fontSize: 7.5, cellPadding: 2.5 },
+      headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      margin: { left: 15, right: 15 },
+    })
+  } else {
+    doc.setFontSize(9)
+    doc.setTextColor(...gray)
+    doc.text('Aucun convoi détecté dans ce jeu de données.', 15, 45)
+  }
+  addFooter(3)
+
+  // ─── PAGE 4: Anomaly breakdown ────────────────────────────────────────────
+  doc.addPage()
+  addHeader('Répartition des anomalies détectées')
+  const typeMap = {}
+  anomalies?.forEach(a => { if (a.type) typeMap[a.type] = (typeMap[a.type] || 0) + 1 })
+  const typeSorted = Object.entries(typeMap).sort((a, b) => b[1] - a[1])
+  autoTable(doc, {
+    startY: 35,
+    head: [['Type d\'anomalie', 'Détections', 'Poids', '% du total']],
+    body: typeSorted.map(([type, count]) => [
+      type,
+      String(count),
+      (WEIGHTS_PDF[type] ?? 0.05).toFixed(2),
+      ((count / (anomalies?.length || 1)) * 100).toFixed(1) + '%',
+    ]),
+    styles: { fontSize: 8, cellPadding: 2.5 },
+    headStyles: { fillColor: navy, textColor: 255, fontStyle: 'bold' },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    columnStyles: {
+      1: { halign: 'right' },
+      2: { halign: 'center' },
+      3: { halign: 'right' },
+    },
+    margin: { left: 15, right: 15 },
+  })
+  addFooter(4)
+
+  doc.save(`rapport_ghost_fleet_${new Date().toISOString().slice(0, 10)}.pdf`)
+}
+
+const WEIGHTS_PDF = {
+  'AIS Disabled': 0.30, 'MMSI Spoofing': 0.25, 'Speed Anomaly': 0.20,
+  'Name Change': 0.18, 'Fake Position': 0.15, 'ML Anomaly': 0.12,
+  'Zone Crossing': 0.10, 'Zone Violation': 0.10, 'Course Anomaly': 0.08,
+}
+
 const SECTIONS = [
   { label: 'Synthèse exécutive',         pages: '1 p', defaultChecked: true },
   { label: 'KPI — analyse globale',       pages: '1 p', defaultChecked: true },
@@ -29,9 +274,10 @@ export default function Rapport() {
   const { mode }              = useContext(ModeContext)
   const [ships,   setShips]   = useState([])
   const [loading, setLoading] = useState(true)
-  const [template, setTemplate] = useState('officiel') // officiel | brief | dossier
-  const [format,   setFormat]   = useState('pdf')       // pdf | docx | csv
+  const [template, setTemplate]   = useState('officiel')
+  const [format,   setFormat]     = useState('pdf')
   const [classification, setClassif] = useState('Diffusion restreinte')
+  const [generating, setGenerating] = useState(false)
   const [sections, setSections] = useState(
     Object.fromEntries(SECTIONS.map(s => [s.label, s.defaultChecked]))
   )
@@ -227,12 +473,39 @@ export default function Rapport() {
               style={{ borderColor: 'var(--line)', background: 'var(--paper)' }}>
               Enregistrer brouillon
             </button>
-            <button className="flex-1 text-[14px] font-semibold text-white rounded-lg px-4 py-3 flex items-center justify-center gap-2"
+            <button
+              disabled={generating || format !== 'pdf'}
+              onClick={async () => {
+                setGenerating(true)
+                try {
+                  // Fetch full ships list for the PDF
+                  const table = mode === 'graph' ? 'ships_graph' : 'ships'
+                  const { data: allShips } = await (mode === 'graph'
+                    ? supabase.from(table).select('*').order('score', { ascending: false }).limit(100)
+                    : supabase.from(table).select('*').neq('flag', 'Unknown').order('score', { ascending: false }).limit(100))
+                  await generatePDF(allShips ?? [], classification)
+                } catch(e) {
+                  console.error('PDF generation error:', e)
+                  alert('Erreur lors de la génération du PDF : ' + e.message)
+                } finally {
+                  setGenerating(false)
+                }
+              }}
+              className="flex-1 text-[14px] font-semibold text-white rounded-lg px-4 py-3 flex items-center justify-center gap-2 disabled:opacity-60"
               style={{ background: 'var(--navy)' }}>
-              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>
-              </svg>
-              Générer le PDF
+              {generating ? (
+                <>
+                  <span className="animate-spin inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+                  Génération…
+                </>
+              ) : (
+                <>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
+                    <path d="M12 3v12m0 0 4-4m-4 4-4-4M5 21h14"/>
+                  </svg>
+                  {format === 'pdf' ? 'Télécharger PDF' : 'Format non supporté'}
+                </>
+              )}
             </button>
           </div>
 
