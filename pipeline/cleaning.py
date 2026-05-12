@@ -165,6 +165,31 @@ def clean_data(data: dict) -> tuple[dict, dict]:
             bbox.tolist(), index=zones.index
         )
 
+    # ── Q3 — Colonne is_in_risk_zone ──────────────────────────────────────────
+    # Indique si chaque point AIS se trouve dans au moins une zone à risque
+    # Méthode : bounding box (lat_min ≤ lat ≤ lat_max ET lon_min ≤ lon ≤ lon_max)
+    valid_zones = zones.dropna(subset=["lat_min", "lat_max", "lon_min", "lon_max"])
+
+    def _in_any_zone(lat, lon):
+        for _, z in valid_zones.iterrows():
+            if z["lat_min"] <= lat <= z["lat_max"] and z["lon_min"] <= lon <= z["lon_max"]:
+                return True
+        return False
+
+    if len(valid_zones) > 0 and "latitude" in ais.columns and "longitude" in ais.columns:
+        ais["is_in_risk_zone"] = ais.apply(
+            lambda row: _in_any_zone(row["latitude"], row["longitude"])
+            if pd.notna(row["latitude"]) and pd.notna(row["longitude"])
+            else False,
+            axis=1,
+        )
+        in_zone_count = ais["is_in_risk_zone"].sum()
+        print(f"[cleaning] Q3 — {in_zone_count} points AIS dans une zone à risque "
+              f"({in_zone_count / max(len(ais), 1) * 100:.1f}%)")
+    else:
+        ais["is_in_risk_zone"] = False
+        print("[cleaning] Q3 — Aucune zone valide, is_in_risk_zone = False partout")
+
     rows_after = len(ais)
     print(f"[cleaning] Done. {rows_after} AIS rows remaining (from {total_rows}).")
 

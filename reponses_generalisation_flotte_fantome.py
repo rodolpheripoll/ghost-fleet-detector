@@ -162,6 +162,80 @@ def q2_status_and_hour(ais: pd.DataFrame) -> pd.DataFrame:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  Q3 — Enrichissement : colonne is_in_risk_zone
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def q3_is_in_risk_zone(ais: pd.DataFrame, zones: pd.DataFrame) -> pd.DataFrame:
+    """
+    Q3 — Ajoute la colonne is_in_risk_zone sur chaque point AIS.
+
+    Pour chaque position (latitude, longitude), vérifie si elle se trouve
+    dans au moins une zone à risque définie par sa bounding box.
+
+    Retourne le DataFrame AIS enrichi et affiche le bilan.
+    """
+    print("\n" + "=" * 60)
+    print("  Q3 — Colonne is_in_risk_zone")
+    print("=" * 60)
+
+    ais = ais.copy()
+
+    # Parser les coordonnées de zones si nécessaire
+    if "lat_min" not in zones.columns and "coordinates" in zones.columns:
+        bbox = zones["coordinates"].apply(_parse_bbox)
+        zones = zones.copy()
+        zones[["lat_min", "lat_max", "lon_min", "lon_max"]] = pd.DataFrame(
+            bbox.tolist(), index=zones.index
+        )
+
+    valid_zones = zones.dropna(subset=["lat_min", "lat_max", "lon_min", "lon_max"])
+    print(f"\n  {len(valid_zones)} zones valides sur {len(zones)} chargées.")
+
+    def _in_any_zone(lat, lon):
+        for _, z in valid_zones.iterrows():
+            if z["lat_min"] <= lat <= z["lat_max"] and z["lon_min"] <= lon <= z["lon_max"]:
+                return True
+        return False
+
+    if len(valid_zones) > 0 and "latitude" in ais.columns and "longitude" in ais.columns:
+        ais["is_in_risk_zone"] = ais.apply(
+            lambda row: _in_any_zone(row["latitude"], row["longitude"])
+            if pd.notna(row.get("latitude")) and pd.notna(row.get("longitude"))
+            else False,
+            axis=1,
+        )
+    else:
+        ais["is_in_risk_zone"] = False
+
+    total    = len(ais)
+    in_zone  = int(ais["is_in_risk_zone"].sum())
+    pct      = in_zone / max(total, 1) * 100
+
+    print(f"\n  Total points AIS analysés     : {total:,}")
+    print(f"  Points dans une zone à risque : {in_zone:,} ({pct:.1f}%)")
+    print(f"  Points hors zone              : {total - in_zone:,} ({100 - pct:.1f}%)")
+
+    # Détail par zone (seulement les zones avec au moins 1 point)
+    print("\n  Détail par zone (zones avec au moins 1 point AIS) :")
+    print(f"  {'Zone':<35}  {'Niveau':<10}  {'Points AIS':>10}")
+    print("  " + "-" * 60)
+    for _, z in valid_zones.iterrows():
+        count = ais[
+            ais["latitude"].between(z["lat_min"], z["lat_max"]) &
+            ais["longitude"].between(z["lon_min"], z["lon_max"])
+        ].shape[0]
+        if count > 0:
+            print(f"  {str(z['name']):<35}  {str(z['risk_level']):<10}  {count:>10,}")
+
+    print("\n  Interprétation :")
+    print("  - is_in_risk_zone = True indique un point AIS dans une zone sous surveillance.")
+    print("  - Combiné à un score élevé, c'est un signal fort d'activité illicite.")
+    print("  - Ces navires doivent être croisés avec les données de comportements suspects.")
+
+    return ais
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  Q9 — Statistiques par zone de risque
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -287,7 +361,7 @@ def q9_zone_stats(ais: pd.DataFrame, behaviors: pd.DataFrame, zones: pd.DataFram
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("  Ghost Fleet — Reponses Generalisation (Q2 & Q9)")
+    print("  Ghost Fleet — Reponses Generalisation (Q2, Q3 & Q9)")
     print("=" * 60)
 
     data_dir = _find_data_dir()
@@ -302,6 +376,9 @@ if __name__ == "__main__":
 
     # ── Q2 ────────────────────────────────────────────────────────────────────
     ais_enriched = q2_status_and_hour(ais)
+
+    # ── Q3 ────────────────────────────────────────────────────────────────────
+    ais_enriched = q3_is_in_risk_zone(ais_enriched, zones)
 
     # ── Q9 ────────────────────────────────────────────────────────────────────
     zone_stats = q9_zone_stats(ais_enriched, behaviors, zones)

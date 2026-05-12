@@ -83,7 +83,7 @@ def push_demo_pipeline(supabase, scored, anomalies, zones, nodes, edges,
         "speed", "course", "status", "ais_active",
         "score", "risk_level", "prior_risk_score",
         "convoy_id", "convoy_size", "convoy_risk",
-        "ship_name", "ship_type", "flag", "hour_of_day",
+        "ship_name", "ship_type", "flag", "hour_of_day", "is_in_risk_zone",
     ]
     available  = [c for c in ships_cols if c in scored.columns]
     ships_data = (
@@ -148,7 +148,7 @@ def push_graph_pipeline(supabase, graph_scored):
         "score", "risk_level",
         "demo_score", "group_discount", "is_isolated",
         "convoy_id", "convoy_size", "zone_score",
-        "flag", "ship_type", "hour_of_day",
+        "flag", "ship_type", "hour_of_day", "is_in_risk_zone",
     ]
     available  = [c for c in graph_cols if c in graph_scored.columns]
     ships_data = (
