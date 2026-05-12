@@ -80,7 +80,7 @@ export default function Dashboard() {
     const table = mode === 'graph' ? 'ships_graph' : 'ships'
     const shipsQ = mode === 'graph'
       ? supabase.from(table).select('*').order('score', { ascending: false })
-      : supabase.from(table).select('*').neq('flag', 'Unknown').order('score', { ascending: false })
+      : supabase.from(table).select('*').order('score', { ascending: false })
 
     Promise.all([
       shipsQ,
