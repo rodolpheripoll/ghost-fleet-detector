@@ -1,7 +1,6 @@
 import { useEffect, useState, useContext } from 'react'
 import dynamic from 'next/dynamic'
 import { supabase, ModeContext } from '../lib/supabase'
-import { useAisStream } from '../lib/useAisStream'
 import ShipTable from '../components/ShipTable'
 
 const Plot = dynamic(() => import('react-plotly.js'), { ssr: false })
@@ -25,41 +24,43 @@ const CHART_LAYOUT = (title) => ({
   autosize:      true,
 })
 
-export default function AnalysePage() {
-  const { mode }         = useContext(ModeContext)
-  const [demoShips,      setDemoShips]     = useState([])
-  const [anomalies,      setAnomalies]     = useState([])
-  const [demoLoading,    setDemoLoading]   = useState(true)
-  const [filter,         setFilter]        = useState('')
-  const [typeFilter,     setTypeFilter]    = useState('all')
+const CONF = { responsive: true }
 
-  const { ships: liveShips, status: liveStatus } = useAisStream(mode === 'live')
+export default function AnalysePage() {
+  const { mode } = useContext(ModeContext)
+  const [tab,         setTab]         = useState('demo')
+  const [demoShips,   setDemoShips]   = useState([])
+  const [graphShips,  setGraphShips]  = useState([])
+  const [anomalies,   setAnomalies]   = useState([])
+  const [loading,     setLoading]     = useState(true)
+  const [filter,      setFilter]      = useState('')
+  const [typeFilter,  setTypeFilter]  = useState('all')
+
+  // Sync tab with global mode
+  useEffect(() => { setTab(mode) }, [mode])
 
   useEffect(() => {
-    if (mode !== 'demo') return
-    setDemoLoading(true)
+    setLoading(true)
     Promise.all([
       supabase.from('ships').select('*'),
+      supabase.from('ships_graph').select('*'),
       supabase.from('anomalies').select('*').order('timestamp', { ascending: true }),
-    ]).then(([{ data: s }, { data: a }]) => {
+    ]).then(([{ data: s }, { data: g }, { data: a }]) => {
       setDemoShips(s ?? [])
+      setGraphShips(g ?? [])
       setAnomalies(a ?? [])
-    }).catch(console.error).finally(() => setDemoLoading(false))
-  }, [mode])
+    }).catch(console.error).finally(() => setLoading(false))
+  }, [])
 
-  const ships   = mode === 'live' ? liveShips : demoShips
-  const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
-
-  // ── Chart data ────────────────────────────────────────────────────────────
+  // ── DEMO charts ─────────────────────────────────────────────────────────────
   const riskGroups = {}
-  ships.forEach(s => {
+  demoShips.forEach(s => {
     const rl = s.risk_level ?? 'Normal'
     if (!riskGroups[rl]) riskGroups[rl] = { mmsi: [], speed: [], score: [] }
     riskGroups[rl].mmsi.push(s.mmsi)
     riskGroups[rl].speed.push(s.speed ?? 0)
     riskGroups[rl].score.push(s.score ?? 0)
   })
-
   const scatterTraces = Object.entries(riskGroups).map(([risk, d]) => ({
     type: 'scatter', mode: 'markers', name: risk,
     x: d.speed, y: d.score, text: d.mmsi,
@@ -69,7 +70,6 @@ export default function AnalysePage() {
 
   const typeCounts = {}
   anomalies.forEach(a => { typeCounts[a.type] = (typeCounts[a.type] ?? 0) + 1 })
-
   const barTrace = [{
     type: 'bar', x: Object.keys(typeCounts), y: Object.values(typeCounts),
     marker: { color: '#3b82f6' },
@@ -90,21 +90,76 @@ export default function AnalysePage() {
   }]
 
   const riskCounts = {}
-  ships.forEach(s => { const rl = s.risk_level ?? 'Normal'; riskCounts[rl] = (riskCounts[rl] ?? 0) + 1 })
+  demoShips.forEach(s => { const rl = s.risk_level ?? 'Normal'; riskCounts[rl] = (riskCounts[rl] ?? 0) + 1 })
   const pieTrace = [{
     type: 'pie', labels: Object.keys(riskCounts), values: Object.values(riskCounts),
     marker: { colors: Object.keys(riskCounts).map(r => RISK_PALETTE[r] ?? '#6b7280') },
     textinfo: 'label+percent',
   }]
 
-  const top10 = [...ships].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10)
+  const top10demo = [...demoShips].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10)
   const hbarTrace = [{
     type: 'bar', orientation: 'h',
-    y: top10.map(s => s.mmsi), x: top10.map(s => s.score ?? 0),
-    marker: { color: top10.map(s => RISK_PALETTE[s.risk_level] ?? '#6b7280') },
+    y: top10demo.map(s => s.mmsi), x: top10demo.map(s => s.score ?? 0),
+    marker: { color: top10demo.map(s => RISK_PALETTE[s.risk_level] ?? '#6b7280') },
   }]
 
-  const anomTypes = ['all', ...new Set(anomalies.map(a => a.type))]
+  // ── GRAPH charts ─────────────────────────────────────────────────────────────
+  const gRiskGroups = {}
+  graphShips.forEach(s => {
+    const rl = s.risk_level ?? 'Normal'
+    if (!gRiskGroups[rl]) gRiskGroups[rl] = { mmsi: [], degree: [], score: [], iso: [], beh: [] }
+    gRiskGroups[rl].mmsi.push(s.mmsi)
+    gRiskGroups[rl].degree.push(s.graph_degree ?? 0)
+    gRiskGroups[rl].score.push(s.score ?? 0)
+    gRiskGroups[rl].iso.push(s.isolation_score ?? 0)
+    gRiskGroups[rl].beh.push(s.behavior_score ?? 0)
+  })
+
+  // Chart 1: Isolation vs Score (scatter degree vs score)
+  const isoScatterTraces = Object.entries(gRiskGroups).map(([risk, d]) => ({
+    type: 'scatter', mode: 'markers', name: risk,
+    x: d.degree, y: d.score, text: d.mmsi,
+    hovertemplate: '<b>%{text}</b><br>Voisins: %{x}<br>Score: %{y:.2f}<extra></extra>',
+    marker: { color: RISK_PALETTE[risk] ?? '#6b7280', size: 7, opacity: 0.8 },
+  }))
+
+  // Chart 2: Average dimension scores
+  const avgDims = ['isolation_score', 'behavior_score', 'route_sim_score', 'zone_score']
+  const avgVals = avgDims.map(dim =>
+    graphShips.length
+      ? graphShips.reduce((sum, s) => sum + (s[dim] ?? 0), 0) / graphShips.length
+      : 0
+  )
+  const dimBarTrace = [{
+    type: 'bar',
+    x: ['Isolation (35%)', 'Comportement (25%)', 'Similarité route (25%)', 'Zone (15%)'],
+    y: avgVals,
+    marker: { color: ['#7c3aed', '#dc2626', '#0ea5e9', '#16a34a'] },
+    hovertemplate: '<b>%{x}</b><br>Moyenne: %{y:.3f}<extra></extra>',
+  }]
+
+  // Chart 3: Degree distribution histogram
+  const allDegrees = graphShips.map(s => s.graph_degree ?? 0)
+  const degreeHistTrace = [{
+    type: 'histogram', x: allDegrees,
+    marker: { color: '#7c3aed', opacity: 0.8 },
+    nbinsx: 20,
+  }]
+
+  // Chart 4: isolation vs behavior scatter
+  const isoBehTraces = Object.entries(gRiskGroups).map(([risk, d]) => ({
+    type: 'scatter', mode: 'markers', name: risk,
+    x: d.iso, y: d.beh, text: d.mmsi,
+    marker: {
+      color: RISK_PALETTE[risk] ?? '#6b7280',
+      size: d.score.map(s => 6 + s * 14),
+      opacity: 0.8,
+    },
+    hovertemplate: '<b>%{text}</b><br>Isolation: %{x:.2f}<br>Comportement: %{y:.2f}<extra></extra>',
+  }))
+
+  const anomTypes  = ['all', ...new Set(anomalies.map(a => a.type))]
   const filteredAnom = anomalies.filter(a => {
     const matchMmsi = !filter || String(a.mmsi).toLowerCase().includes(filter.toLowerCase())
     const matchType = typeFilter === 'all' || a.type === typeFilter
@@ -120,81 +175,129 @@ export default function AnalysePage() {
     { key: 'timestamp',   label: 'Timestamp',   render: v => v ? new Date(v).toLocaleString('fr-FR') : 'N/A' },
   ]
 
-  const CONF = { responsive: true }
-
   if (loading) return (
     <main className="max-w-7xl mx-auto px-4 py-8 text-[#64748b] animate-pulse">
-      {mode === 'live' ? 'Connexion à aisstream.io...' : 'Chargement des analyses...'}
+      Chargement des analyses...
     </main>
   )
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-[#0f172a]">Analyse ML — Isolation Forest</h1>
-        {mode === 'live' && (
-          <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-3 py-1 rounded-full">
-            Données temps réel — {ships.length} navires
-          </span>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
-        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-          <Plot data={scatterTraces} layout={CHART_LAYOUT('Vitesse vs Score de suspicion')} config={CONF} style={{ width: '100%' }} />
-        </div>
-        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-          <Plot data={barTrace} layout={CHART_LAYOUT('Anomalies par type')} config={CONF} style={{ width: '100%' }} />
-        </div>
-        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-          <Plot data={lineTrace} layout={CHART_LAYOUT('Anomalies détectées par jour')} config={CONF} style={{ width: '100%' }} />
-        </div>
-        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-          <Plot data={pieTrace} layout={{ ...CHART_LAYOUT('Répartition par niveau de risque'), showlegend: true }} config={CONF} style={{ width: '100%' }} />
-        </div>
-        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm lg:col-span-2">
-          <Plot data={hbarTrace} layout={{ ...CHART_LAYOUT('Top 10 navires par score'), yaxis: { ...CHART_LAYOUT('').yaxis, autorange: 'reversed' } }} config={CONF} style={{ width: '100%' }} />
+        <h1 className="text-2xl font-bold text-[#0f172a]">Analyse</h1>
+        <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1">
+          <button
+            onClick={() => setTab('demo')}
+            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${
+              tab === 'demo' ? 'bg-[#0ea5e9] text-white shadow-sm' : 'text-[#64748b] hover:text-[#0f172a]'
+            }`}
+          >
+            Analyse DEMO
+          </button>
+          <button
+            onClick={() => setTab('graph')}
+            className={`px-4 py-1.5 rounded-full text-sm font-semibold transition-all ${
+              tab === 'graph' ? 'bg-[#7c3aed] text-white shadow-sm' : 'text-[#64748b] hover:text-[#0f172a]'
+            }`}
+          >
+            Analyse GRAPH
+          </button>
         </div>
       </div>
 
-      {/* Methodology */}
-      <section className="bg-white border border-slate-200 rounded-xl p-6 mb-8 shadow-sm">
-        <h2 className="text-lg font-semibold text-[#0f172a] mb-4">Méthodologie de détection</h2>
-        <div className="space-y-4 text-sm text-[#0f172a]">
-          <div>
-            <h3 className="text-[#0ea5e9] font-semibold mb-1">Isolation Forest (ML)</h3>
-            <p>L&apos;Isolation Forest isole les anomalies en partitionnant aléatoirement l&apos;espace des caractéristiques. Le paramètre <code className="bg-slate-100 px-1 rounded">contamination=0.05</code> reflète le taux estimé de 5% de navires fantômes (source : Windward Maritime AI Annual Report 2022).</p>
+      {/* ── DEMO TAB ── */}
+      {tab === 'demo' && (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+              <Plot data={scatterTraces} layout={CHART_LAYOUT('Vitesse vs Score de suspicion')} config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+              <Plot data={barTrace} layout={CHART_LAYOUT('Anomalies par type')} config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+              <Plot data={lineTrace} layout={CHART_LAYOUT('Anomalies détectées par jour')} config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+              <Plot data={pieTrace} layout={{ ...CHART_LAYOUT('Répartition par niveau de risque'), showlegend: true }} config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm lg:col-span-2">
+              <Plot data={hbarTrace} layout={{ ...CHART_LAYOUT('Top 10 navires par score'), yaxis: { ...CHART_LAYOUT('').yaxis, autorange: 'reversed' } }} config={CONF} style={{ width: '100%' }} />
+            </div>
           </div>
-          <div>
-            <h3 className="text-[#0ea5e9] font-semibold mb-1">Score composite</h3>
-            <pre className="bg-slate-50 border border-slate-200 rounded p-3 text-xs overflow-x-auto">{`score = 0.30×ais_off + 0.25×mmsi_spoof + 0.20×speed_anomaly + 0.15×position_jump + 0.10×critical_zone`}</pre>
-          </div>
-          <div>
-            <h3 className="text-[#0ea5e9] font-semibold mb-1">Seuils</h3>
-            <ul className="text-xs text-[#64748b] list-disc list-inside space-y-1">
-              <li><b>Vitesse &gt; 25 kn</b> — max commercial IMO (Maersk Triple-E)</li>
-              <li><b>Saut &gt; 0.05°</b> (~5.5 km) — téléportation impossible</li>
-              <li><b>AIS off &gt; 2h</b> — SOLAS Chap. V Reg. 19.2.4</li>
-              <li><b>MMSI FAKE-</b> — non conforme ITU-R M.585</li>
-            </ul>
-          </div>
-        </div>
-      </section>
 
-      {/* Anomaly table */}
-      <section>
-        <div className="flex flex-wrap items-center gap-4 mb-4">
-          <h2 className="text-lg font-semibold text-[#0f172a]">Tableau des anomalies</h2>
-          <input type="text" placeholder="Filtrer par MMSI..." value={filter} onChange={e => setFilter(e.target.value)}
-            className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]" />
-          <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
-            className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]">
-            {anomTypes.map(t => <option key={t} value={t}>{t === 'all' ? 'Tous les types' : t}</option>)}
-          </select>
-          <span className="text-[#64748b] text-xs">{filteredAnom.length} anomalie(s)</span>
-        </div>
-        <ShipTable ships={filteredAnom} columns={anomColumns} />
-      </section>
+          <section className="bg-white border border-slate-200 rounded-xl p-6 mb-8 shadow-sm">
+            <h2 className="text-lg font-semibold text-[#0f172a] mb-4">Méthodologie de détection</h2>
+            <div className="space-y-4 text-sm text-[#0f172a]">
+              <div>
+                <h3 className="text-[#0ea5e9] font-semibold mb-1">Isolation Forest (ML)</h3>
+                <p>L&apos;Isolation Forest isole les anomalies en partitionnant aléatoirement l&apos;espace des caractéristiques. Paramètre <code className="bg-slate-100 px-1 rounded">contamination=0.05</code> (5% de navires suspects).</p>
+              </div>
+              <div>
+                <h3 className="text-[#0ea5e9] font-semibold mb-1">Score composite</h3>
+                <pre className="bg-slate-50 border border-slate-200 rounded p-3 text-xs overflow-x-auto">{`score = max_confidence_per_type × weight_per_type`}</pre>
+              </div>
+            </div>
+          </section>
+
+          <section>
+            <div className="flex flex-wrap items-center gap-4 mb-4">
+              <h2 className="text-lg font-semibold text-[#0f172a]">Tableau des anomalies</h2>
+              <input type="text" placeholder="Filtrer par MMSI..." value={filter} onChange={e => setFilter(e.target.value)}
+                className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]" />
+              <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
+                className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]">
+                {anomTypes.map(t => <option key={t} value={t}>{t === 'all' ? 'Tous les types' : t}</option>)}
+              </select>
+              <span className="text-[#64748b] text-xs">{filteredAnom.length} anomalie(s)</span>
+            </div>
+            <ShipTable ships={filteredAnom} columns={anomColumns} />
+          </section>
+        </>
+      )}
+
+      {/* ── GRAPH TAB ── */}
+      {tab === 'graph' && (
+        <>
+          <section className="bg-[#f5f3ff] border border-purple-200 rounded-xl p-5 mb-8 shadow-sm">
+            <h2 className="text-base font-semibold text-[#7c3aed] mb-2">Scoring par théorie des graphes</h2>
+            <p className="text-sm text-[#0f172a] leading-relaxed">
+              Chaque navire est un nœud dans un graphe de proximité (arête = distance &lt; 20 nm).
+              L&apos;<b>isolation (35%)</b> mesure le degré du nœud — un navire seul est suspect.
+              La <b>similarité de route (25%)</b> compare la route du navire avec celle des navires suspects connus via la similarité de Jaccard (cellules 3°×3°).
+              Les <b>comportements (25%)</b> agrègent les violations AIS/MMSI/vitesse (booléen par type, non cumulatif).
+              Le <b>contexte géographique (15%)</b> pondère la présence en zone sanctionnée.
+            </p>
+          </section>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+              <Plot data={isoScatterTraces}
+                layout={CHART_LAYOUT('Isolation vs Score (degré de voisinage)')}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+              <Plot data={dimBarTrace}
+                layout={CHART_LAYOUT('Score moyen par dimension')}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+              <Plot data={degreeHistTrace}
+                layout={CHART_LAYOUT('Distribution des voisins à 20 nm')}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+            <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+              <Plot data={isoBehTraces}
+                layout={{
+                  ...CHART_LAYOUT('Isolation vs Comportement (taille = score)'),
+                  xaxis: { ...CHART_LAYOUT('').xaxis, title: 'Isolation' },
+                  yaxis: { ...CHART_LAYOUT('').yaxis, title: 'Comportement' },
+                }}
+                config={CONF} style={{ width: '100%' }} />
+            </div>
+          </div>
+        </>
+      )}
     </main>
   )
 }

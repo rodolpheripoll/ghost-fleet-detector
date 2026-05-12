@@ -1,6 +1,5 @@
 import { useEffect, useState, useContext } from 'react'
 import { supabase, ModeContext } from '../lib/supabase'
-import { useAisStream } from '../lib/useAisStream'
 
 function RiskBadge({ value }) {
   const v = value ?? 'Normal'
@@ -25,7 +24,7 @@ function StatCard({ label, value, sub, color = '#0ea5e9' }) {
 function downloadCSV(ships) {
   const cols = ['mmsi','score','risk_level','latitude','longitude','speed','course','status','ais_active','timestamp']
   const header = cols.join(',')
-  const rows   = ships.map(s => cols.map(c => {
+  const rows = ships.map(s => cols.map(c => {
     const v = s[c]
     if (v == null) return ''
     if (typeof v === 'string' && v.includes(',')) return `"${v}"`
@@ -40,33 +39,29 @@ function downloadCSV(ships) {
 }
 
 export default function RapportPage() {
-  const { mode }   = useContext(ModeContext)
-  const [demoShips,    setDemoShips]    = useState([])
-  const [anomalies,    setAnomalies]    = useState([])
-  const [demoLoading,  setDemoLoading]  = useState(true)
-  const [pdfLoading,   setPdfLoading]   = useState(false)
-  const [error,        setError]        = useState(null)
-
-  const { ships: liveShips, status: liveStatus, error: liveError } = useAisStream(mode === 'live')
+  const { mode }     = useContext(ModeContext)
+  const [ships,      setShips]     = useState([])
+  const [anomalies,  setAnomalies] = useState([])
+  const [loading,    setLoading]   = useState(true)
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const [error,      setError]     = useState(null)
 
   useEffect(() => {
-    if (mode !== 'demo') return
-    setDemoLoading(true)
+    setLoading(true)
     setError(null)
+    const table = mode === 'graph' ? 'ships_graph' : 'ships'
     Promise.all([
-      supabase.from('ships').select('*').order('score', { ascending: false }),
-      supabase.from('anomalies').select('*'),
+      supabase.from(table).select('*').order('score', { ascending: false }),
+      mode === 'demo'
+        ? supabase.from('anomalies').select('*')
+        : Promise.resolve({ data: [], error: null }),
     ]).then(([{ data: s, error: se }, { data: a, error: ae }]) => {
       if (se) throw se
       if (ae) throw ae
-      setDemoShips(s ?? [])
+      setShips(s ?? [])
       setAnomalies(a ?? [])
-    }).catch(e => setError(e.message)).finally(() => setDemoLoading(false))
+    }).catch(e => setError(e.message)).finally(() => setLoading(false))
   }, [mode])
-
-  const ships   = mode === 'live' ? liveShips : demoShips
-  const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
-  const err     = mode === 'live' ? liveError : error
 
   const suspicious = ships.filter(s => s.score > 0.3)
   const critical   = ships.filter(s => s.score > 0.6)
@@ -96,7 +91,7 @@ export default function RapportPage() {
 
   if (loading) return (
     <main className="max-w-7xl mx-auto px-4 py-8 text-[#64748b] animate-pulse">
-      {mode === 'live' ? 'Connexion à aisstream.io...' : 'Chargement du rapport...'}
+      Chargement du rapport...
     </main>
   )
 
@@ -106,7 +101,9 @@ export default function RapportPage() {
         <div>
           <h1 className="text-2xl font-bold text-[#0f172a]">Rapport — Flotte Fantôme</h1>
           <p className="text-[#64748b] text-sm mt-1">
-            {mode === 'live' ? `Données temps réel aisstream.io — ${ships.length} navires` : 'Synthèse de la détection CSV pipeline'}
+            {mode === 'graph'
+              ? `Graph Theory — ${ships.length} navires (ships_graph)`
+              : 'Synthèse de la détection CSV pipeline'}
           </p>
         </div>
         <div className="flex gap-3">
@@ -123,9 +120,9 @@ export default function RapportPage() {
         </div>
       </div>
 
-      {err && (
+      {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-6 text-sm">
-          {err}
+          {error}
         </div>
       )}
 
@@ -138,7 +135,7 @@ export default function RapportPage() {
         <StatCard label="ML"          value={mlAnom.length}     color="#8b5cf6" />
       </div>
 
-      {Object.keys(typeCounts).length > 0 && (
+      {mode === 'demo' && Object.keys(typeCounts).length > 0 && (
         <section className="bg-white border border-slate-200 rounded-xl p-5 mb-8 shadow-sm">
           <h2 className="text-base font-semibold text-[#0f172a] mb-4">Répartition par type d&apos;anomalie</h2>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
@@ -152,23 +149,25 @@ export default function RapportPage() {
         </section>
       )}
 
-      <section className="bg-white border border-slate-200 rounded-xl p-5 mb-8 shadow-sm">
-        <h2 className="text-base font-semibold text-[#0f172a] mb-3">Qualité des données</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-            <p className="text-[#64748b] text-xs mb-1">Positions AIS en base</p>
-            <p className="text-[#0f172a] font-bold">{ships.length}</p>
+      {mode === 'graph' && (
+        <section className="bg-[#f5f3ff] border border-purple-200 rounded-xl p-5 mb-8 shadow-sm">
+          <h2 className="text-base font-semibold text-[#7c3aed] mb-4">Dimensions du score graph</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+            {['isolation_score','behavior_score','route_sim_score','zone_score'].map(dim => {
+              const avg = ships.length
+                ? (ships.reduce((s, r) => s + (r[dim] ?? 0), 0) / ships.length).toFixed(3)
+                : '0.000'
+              return (
+                <div key={dim} className="bg-white border border-purple-100 rounded-lg p-3">
+                  <p className="text-[#64748b] text-xs mb-1">{dim.replace('_score','').replace('_',' ')}</p>
+                  <p className="text-[#7c3aed] font-bold">{avg}</p>
+                  <p className="text-[#64748b] text-xs">moyenne</p>
+                </div>
+              )
+            })}
           </div>
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-            <p className="text-[#64748b] text-xs mb-1">AIS désactivé</p>
-            <p className="text-[#0f172a] font-bold">{ships.filter(s => !s.ais_active).length}</p>
-          </div>
-          <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
-            <p className="text-[#64748b] text-xs mb-1">MMSI FAKE-</p>
-            <p className="text-[#0f172a] font-bold">{ships.filter(s => String(s.mmsi).startsWith('FAKE-')).length}</p>
-          </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       <section>
         <h2 className="text-base font-semibold text-[#0f172a] mb-4">
@@ -176,16 +175,21 @@ export default function RapportPage() {
         </h2>
         {suspicious.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-xl p-8 text-center text-[#64748b]">
-            Aucun navire suspect. {mode === 'demo' ? 'Lancez le pipeline Python pour alimenter la base.' : 'Les navires live ont tous un score normal (pas de scoring ML en temps réel).'}
+            Aucun navire suspect. Lancez le pipeline Python pour alimenter la base.
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm">
             <table className="w-full text-sm text-[#0f172a]">
               <thead className="bg-slate-50 text-[#64748b] uppercase text-xs border-b border-slate-200">
                 <tr>
-                  {['#','MMSI','Score','Risque','Lat','Lon','Vitesse','AIS actif','Timestamp'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
-                  ))}
+                  {mode === 'graph'
+                    ? ['#','MMSI','Score','Risque','Isolation','Comport.','Route','Zone','Voisins'].map(h => (
+                        <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
+                      ))
+                    : ['#','MMSI','Score','Risque','Lat','Lon','Vitesse','AIS actif','Timestamp'].map(h => (
+                        <th key={h} className="px-4 py-3 text-left whitespace-nowrap">{h}</th>
+                      ))
+                  }
                 </tr>
               </thead>
               <tbody className="bg-white">
@@ -195,17 +199,25 @@ export default function RapportPage() {
                     <td className="px-4 py-2.5 font-mono text-xs">{ship.mmsi}</td>
                     <td className="px-4 py-2.5 font-semibold">{(parseFloat(ship.score) || 0).toFixed(2)}</td>
                     <td className="px-4 py-2.5"><RiskBadge value={ship.risk_level} /></td>
-                    <td className="px-4 py-2.5">{ship.latitude?.toFixed(4) ?? 'N/A'}</td>
-                    <td className="px-4 py-2.5">{ship.longitude?.toFixed(4) ?? 'N/A'}</td>
-                    <td className="px-4 py-2.5">{ship.speed != null ? `${ship.speed} kn` : 'N/A'}</td>
-                    <td className="px-4 py-2.5">
-                      <span className={ship.ais_active ? 'text-[#16a34a] font-medium' : 'text-[#dc2626] font-medium'}>
-                        {ship.ais_active ? 'Oui' : 'Non'}
-                      </span>
-                    </td>
-                    <td className="px-4 py-2.5 text-xs text-[#64748b] whitespace-nowrap">
-                      {ship.timestamp ? new Date(ship.timestamp).toLocaleString('fr-FR') : 'N/A'}
-                    </td>
+                    {mode === 'graph' ? (<>
+                      <td className="px-4 py-2.5">{(ship.isolation_score ?? 0).toFixed(2)}</td>
+                      <td className="px-4 py-2.5">{(ship.behavior_score  ?? 0).toFixed(2)}</td>
+                      <td className="px-4 py-2.5">{(ship.route_sim_score ?? 0).toFixed(2)}</td>
+                      <td className="px-4 py-2.5">{(ship.zone_score      ?? 0).toFixed(2)}</td>
+                      <td className="px-4 py-2.5">{ship.graph_degree ?? 0}</td>
+                    </>) : (<>
+                      <td className="px-4 py-2.5">{ship.latitude?.toFixed(4) ?? 'N/A'}</td>
+                      <td className="px-4 py-2.5">{ship.longitude?.toFixed(4) ?? 'N/A'}</td>
+                      <td className="px-4 py-2.5">{ship.speed != null ? `${ship.speed} kn` : 'N/A'}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={ship.ais_active ? 'text-[#16a34a] font-medium' : 'text-[#dc2626] font-medium'}>
+                          {ship.ais_active ? 'Oui' : 'Non'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-[#64748b] whitespace-nowrap">
+                        {ship.timestamp ? new Date(ship.timestamp).toLocaleString('fr-FR') : 'N/A'}
+                      </td>
+                    </>)}
                   </tr>
                 ))}
               </tbody>

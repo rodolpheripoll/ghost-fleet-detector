@@ -6,33 +6,38 @@ import { ModeContext } from '../lib/supabase'
 const NAV_LINKS = [
   { href: '/',        label: 'Dashboard'  },
   { href: '/carte',   label: 'Carte'      },
-  { href: '/analyse', label: 'Analyse ML' },
+  { href: '/analyse', label: 'Analyse'    },
   { href: '/graphe',  label: 'Graphe'     },
   { href: '/rapport', label: 'Rapport'    },
 ]
 
 function ModeToggle() {
   const { mode, setMode } = useContext(ModeContext)
-  const isLive = mode === 'live'
+  const isGraph = mode === 'graph'
 
   return (
-    <button
-      onClick={() => setMode(isLive ? 'demo' : 'live')}
-      className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-bold
-                  border transition-all duration-300 select-none
-                  ${isLive
-                    ? 'bg-green-50 border-green-300 text-green-700 hover:bg-green-100'
-                    : 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100'
-                  }`}
-    >
-      <span className="relative flex h-2 w-2">
-        <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75
-                          ${isLive ? 'bg-green-500' : 'bg-amber-500'}`} />
-        <span className={`relative inline-flex rounded-full h-2 w-2
-                          ${isLive ? 'bg-green-500' : 'bg-amber-500'}`} />
-      </span>
-      {isLive ? 'LIVE — aisstream.io' : 'DEMO — Données CSV'}
-    </button>
+    <div className="flex items-center gap-1 bg-slate-100 rounded-full p-1">
+      <button
+        onClick={() => setMode('demo')}
+        className={`px-3 py-1 rounded-full text-xs font-bold transition-all duration-200 ${
+          !isGraph
+            ? 'bg-[#0ea5e9] text-white shadow-sm'
+            : 'text-[#64748b] hover:text-[#0f172a]'
+        }`}
+      >
+        DEMO — Règles + IA
+      </button>
+      <button
+        onClick={() => setMode('graph')}
+        className={`px-3 py-1 rounded-full text-xs font-bold transition-all duration-200 ${
+          isGraph
+            ? 'bg-[#7c3aed] text-white shadow-sm'
+            : 'text-[#64748b] hover:text-[#0f172a]'
+        }`}
+      >
+        GRAPH — Théorie des graphes
+      </button>
+    </div>
   )
 }
 

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, useContext } from 'react'
 import { supabase, ModeContext } from '../lib/supabase'
-import { useAisStream } from '../lib/useAisStream'
 
 const NODE_COLORS = {
   ship:     (score) => score >= 0.6 ? '#dc2626' : score >= 0.3 ? '#d97706' : '#6b7280',
@@ -15,45 +14,27 @@ const EDGE_COLORS = {
 }
 
 export default function GraphePage() {
-  const { mode }   = useContext(ModeContext)
-  const canvasRef  = useRef(null)
-  const [demoNodes,   setDemoNodes]   = useState([])
-  const [demoEdges,   setDemoEdges]   = useState([])
-  const [demoLoading, setDemoLoading] = useState(true)
-  const [demoError,   setDemoError]   = useState(null)
-  const [selected, setSelected] = useState(null)
-
-  const { ships: liveShips, status: liveStatus, error: liveError } = useAisStream(mode === 'live')
+  const { mode }     = useContext(ModeContext)
+  const canvasRef    = useRef(null)
+  const [nodes,      setNodes]   = useState([])
+  const [edges,      setEdges]   = useState([])
+  const [loading,    setLoading] = useState(true)
+  const [error,      setError]   = useState(null)
+  const [selected,   setSelected] = useState(null)
 
   useEffect(() => {
-    if (mode !== 'demo') return
-    setDemoLoading(true)
-    setDemoError(null)
+    setLoading(true)
+    setError(null)
     Promise.all([
       supabase.from('graph_nodes').select('*'),
       supabase.from('graph_edges').select('*'),
     ]).then(([{ data: n, error: ne }, { data: e, error: ee }]) => {
       if (ne) throw ne
       if (ee) throw ee
-      setDemoNodes(n ?? [])
-      setDemoEdges(e ?? [])
-    }).catch(e => setDemoError(e.message)).finally(() => setDemoLoading(false))
+      setNodes(n ?? [])
+      setEdges(e ?? [])
+    }).catch(e => setError(e.message)).finally(() => setLoading(false))
   }, [mode])
-
-  // In live mode build synthetic nodes from WebSocket ships
-  const liveNodes = liveShips.map(s => ({
-    id:         s.mmsi,
-    type:       'ship',
-    label:      s.mmsi,
-    score:      s.score ?? 0,
-    risk_level: s.risk_level ?? 'Normal',
-    centrality: 0,
-  }))
-
-  const nodes   = mode === 'live' ? liveNodes : demoNodes
-  const edges   = mode === 'live' ? []         : demoEdges
-  const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
-  const error   = mode === 'live' ? liveError  : demoError
 
   useEffect(() => {
     if (!nodes.length || !canvasRef.current) return
@@ -149,7 +130,7 @@ export default function GraphePage() {
       <div className="flex-1 relative">
         {loading ? (
           <div className="flex items-center justify-center h-full text-[#64748b]">
-            {mode === 'live' ? 'Connexion à aisstream.io...' : 'Chargement du graphe...'}
+            Chargement du graphe...
           </div>
         ) : error ? (
           <div className="flex items-center justify-center h-full text-red-600">Erreur : {error}</div>
@@ -203,7 +184,6 @@ export default function GraphePage() {
           <div className="text-[#64748b] text-sm">
             <p>Sélectionnez un nœud pour voir ses détails.</p>
             <p className="mt-4 text-xs"><b className="text-[#0f172a]">{nodes.length}</b> nœuds · <b className="text-[#0f172a]">{edges.length}</b> arêtes</p>
-            {mode === 'live' && <p className="mt-2 text-xs text-green-600">Mode LIVE — navires temps réel</p>}
           </div>
         )}
       </div>

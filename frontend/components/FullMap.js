@@ -1,11 +1,3 @@
-/**
- * FullMap — full-screen interactive Leaflet map.
- * Must be imported with dynamic({ ssr: false }).
- *
- * Map initialisation runs once. Ship markers and zone overlays
- * are managed in separate effects that re-run when props change,
- * so live WebSocket data (LIVE mode) is correctly reflected.
- */
 import { useEffect, useRef } from 'react'
 import L from 'leaflet'
 
@@ -28,33 +20,46 @@ const TRAJ_PALETTE = [
   '#fb923c','#38bdf8','#4ade80','#f87171','#e879f9',
 ]
 
-function popupHtml(ship) {
-  return `
-    <div style="font-size:12px;line-height:1.6">
+function popupHtml(ship, mode) {
+  const base = `
+    <div style="font-size:12px;line-height:1.6;min-width:180px">
       <b>MMSI :</b> ${ship.mmsi}<br/>
       <b>Score :</b> ${parseFloat(ship.score ?? 0).toFixed(2)}<br/>
       <b>Risque :</b> ${ship.risk_level ?? 'N/A'}<br/>
       <b>Vitesse :</b> ${ship.speed ?? 'N/A'} kn<br/>
       <b>Cap :</b> ${ship.course ?? 'N/A'}°<br/>
-      <b>Statut :</b> ${ship.status ?? 'N/A'}<br/>
       <b>AIS actif :</b> ${ship.ais_active}<br/>
       <b>Timestamp :</b> ${ship.timestamp ? new Date(ship.timestamp).toLocaleString('fr-FR') : 'N/A'}
-    </div>
-  `
+    </div>`
+
+  if (mode === 'graph') {
+    return `
+      <div style="font-size:12px;line-height:1.6;min-width:200px">
+        <b>MMSI :</b> ${ship.mmsi}<br/>
+        <b>Score :</b> ${parseFloat(ship.score ?? 0).toFixed(2)} — ${ship.risk_level ?? 'N/A'}<br/>
+        <hr style="margin:4px 0;border-color:#e2e8f0"/>
+        🏝️ <b>Isolation :</b> ${parseFloat(ship.isolation_score ?? 0).toFixed(2)}<br/>
+        🚨 <b>Comportement :</b> ${parseFloat(ship.behavior_score ?? 0).toFixed(2)}<br/>
+        🗺️ <b>Similarité route :</b> ${parseFloat(ship.route_sim_score ?? 0).toFixed(2)}<br/>
+        🌍 <b>Zone :</b> ${parseFloat(ship.zone_score ?? 0).toFixed(2)}<br/>
+        📡 <b>Voisins &lt;20nm :</b> ${ship.graph_degree ?? 0} navires<br/>
+        <b>Vitesse :</b> ${ship.speed ?? 'N/A'} kn
+      </div>`
+  }
+  return base
 }
 
-export default function FullMap({ ships = [], zones = [] }) {
-  const mapRef        = useRef(null)   // DOM node
-  const instanceRef   = useRef(null)   // Leaflet map instance
+export default function FullMap({ ships = [], zones = [], mode = 'demo' }) {
+  const mapRef        = useRef(null)
+  const instanceRef   = useRef(null)
   const lgNormalRef   = useRef(null)
   const lgDisabledRef = useRef(null)
   const lgFakeRef     = useRef(null)
   const lgSuspRef     = useRef(null)
   const lgZonesRef    = useRef(null)
   const lgTrajRef     = useRef(null)
-  const fittedRef     = useRef(false)  // only auto-fit bounds once
+  const fittedRef     = useRef(false)
 
-  // ── Effect 1: initialise the map exactly once ────────────────────────────
   useEffect(() => {
     if (instanceRef.current) return
 
@@ -74,12 +79,12 @@ export default function FullMap({ ships = [], zones = [] }) {
     lgTrajRef.current     = L.layerGroup().addTo(map)
 
     L.control.layers(null, {
-      'Positions normales':    lgNormalRef.current,
-      'AIS desactive':         lgDisabledRef.current,
-      'MMSI FAKE (spoofing)':  lgFakeRef.current,
-      'Navires suspects':      lgSuspRef.current,
-      'Zones a risque':        lgZonesRef.current,
-      'Trajectoires':          lgTrajRef.current,
+      'Positions normales':   lgNormalRef.current,
+      'AIS desactive':        lgDisabledRef.current,
+      'MMSI FAKE (spoofing)': lgFakeRef.current,
+      'Navires suspects':     lgSuspRef.current,
+      'Zones a risque':       lgZonesRef.current,
+      'Trajectoires':         lgTrajRef.current,
     }, { collapsed: false }).addTo(map)
 
     const legend = L.control({ position: 'bottomleft' })
@@ -89,15 +94,13 @@ export default function FullMap({ ships = [], zones = [] }) {
         <div style="background:rgba(15,23,42,0.92);color:#e2e8f0;padding:10px 14px;
                     border-radius:8px;border:1px solid #334155;font-size:12px;line-height:1.8">
           <b>Legende</b><br/>
-          <span style="color:#6b7280">&#9679;</span> Position normale<br/>
+          <span style="color:#6b7280">&#9679;</span> Normal<br/>
           <span style="color:#f97316">&#9679;</span> AIS desactive<br/>
-          <span style="color:#dc2626">!</span> MMSI FAKE (spoofing)<br/>
-          <span style="color:#991b1b">&#9679;</span> Navire suspect<br/>
+          <span style="color:#dc2626">!</span> MMSI FAKE<br/>
+          <span style="color:#991b1b">&#9679;</span> Suspect / Critique<br/>
           <hr style="border-color:#334155;margin:4px 0"/>
           <span style="color:#ef4444">&#9644;</span> Zone Critique<br/>
-          <span style="color:#f97316">&#9644;</span> Zone Haute<br/>
-          <span style="color:#eab308">&#9644;</span> Zone Moyenne<br/>
-          <span style="color:#22c55e">&#9644;</span> Zone Faible
+          <span style="color:#f97316">&#9644;</span> Zone Haute
         </div>`
       return div
     }
@@ -105,18 +108,11 @@ export default function FullMap({ ships = [], zones = [] }) {
 
     return () => {
       map.remove()
-      instanceRef.current   = null
-      lgNormalRef.current   = null
-      lgDisabledRef.current = null
-      lgFakeRef.current     = null
-      lgSuspRef.current     = null
-      lgZonesRef.current    = null
-      lgTrajRef.current     = null
-      fittedRef.current     = false
+      instanceRef.current = null
+      fittedRef.current   = false
     }
   }, [])
 
-  // ── Effect 2: update zone overlays when zones prop changes ───────────────
   useEffect(() => {
     if (!lgZonesRef.current) return
     lgZonesRef.current.clearLayers()
@@ -133,11 +129,9 @@ export default function FullMap({ ships = [], zones = [] }) {
     })
   }, [zones])
 
-  // ── Effect 3: update ship markers when ships prop changes ─────────────────
   useEffect(() => {
     if (!lgNormalRef.current) return
 
-    // Clear all ship layers
     lgNormalRef.current.clearLayers()
     lgDisabledRef.current.clearLayers()
     lgFakeRef.current.clearLayers()
@@ -147,17 +141,14 @@ export default function FullMap({ ships = [], zones = [] }) {
     const validShips = ships.filter(s => s.latitude != null && s.longitude != null)
     if (!validShips.length) return
 
-    // Group positions by MMSI for trajectory polylines
-    const byMmsi    = {}
+    const byMmsi = {}
+    let colorIdx = 0
     const trajColors = {}
-    let   colorIdx   = 0
-
     validShips.forEach(ship => {
       const m = String(ship.mmsi)
       if (!byMmsi[m]) byMmsi[m] = []
       byMmsi[m].push([ship.latitude, ship.longitude])
     })
-
     Object.entries(byMmsi).forEach(([mmsi, coords]) => {
       if (coords.length < 2) return
       if (!trajColors[mmsi]) {
@@ -171,7 +162,7 @@ export default function FullMap({ ships = [], zones = [] }) {
     validShips.forEach(ship => {
       const mmsi  = String(ship.mmsi)
       const score = parseFloat(ship.score ?? 0)
-      const popup = popupHtml(ship)
+      const popup = popupHtml(ship, mode)
 
       if (mmsi.startsWith('FAKE-')) {
         const icon = L.divIcon({
@@ -212,7 +203,6 @@ export default function FullMap({ ships = [], zones = [] }) {
       }
     })
 
-    // Auto-fit bounds only on first batch of ships (avoid jarring re-fits in LIVE mode)
     if (!fittedRef.current && instanceRef.current) {
       const lats = validShips.map(s => s.latitude)
       const lons = validShips.map(s => s.longitude)
@@ -222,7 +212,7 @@ export default function FullMap({ ships = [], zones = [] }) {
       ], { padding: [30, 30] })
       fittedRef.current = true
     }
-  }, [ships])
+  }, [ships, mode])
 
   return <div ref={mapRef} style={{ height: '100%', width: '100%' }} />
 }

@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Test AisStream</title>
+  <style>
+    body { background: #0f172a; color: #e2e8f0; font-family: monospace; padding: 20px; }
+    #status { font-size: 20px; margin-bottom: 16px; }
+    #log { background: #1e293b; padding: 16px; border-radius: 8px; height: 400px; overflow-y: auto; font-size: 13px; }
+    button { background: #1d4ed8; color: white; border: none; padding: 10px 24px; border-radius: 8px; font-size: 14px; cursor: pointer; margin-bottom: 16px; }
+  </style>
+</head>
+<body>
+  <h2>Test direct WebSocket — aisstream.io</h2>
+  <div id="status">⚪ Idle</div>
+  <button onclick="test()">Lancer le test</button>
+  <div id="log">Cliquer sur le bouton...</div>
+
+  <script>
+    const KEY = '169d5e6303ef39ddf5fe87798f6e95a939f3e863'
+    const log = document.getElementById('log')
+    const status = document.getElementById('status')
+
+    function addLog(msg) {
+      const ts = new Date().toISOString().substr(11, 12)
+      log.innerHTML += `<div>${ts} — ${msg}</div>`
+      log.scrollTop = log.scrollHeight
+    }
+
+    function test() {
+      log.innerHTML = ''
+      status.textContent = '🟡 Connexion...'
+      addLog('Ouverture WebSocket vers wss://stream.aisstream.io/v0/stream...')
+
+      const ws = new WebSocket('wss://stream.aisstream.io/v0/stream')
+
+      ws.onopen = () => {
+        status.textContent = '🟢 Connecte'
+        addLog('✅ WebSocket OUVERT')
+        const msg = {
+          APIKey: KEY,
+          BoundingBoxes: [[[-90, -180], [90, 180]]],
+          FilterMessageTypes: ['PositionReport']
+        }
+        ws.send(JSON.stringify(msg))
+        addLog('📤 Subscription envoyee')
+      }
+
+      ws.onmessage = async (e) => {
+        try {
+          const text = typeof e.data === 'string' ? e.data : await e.data.text()
+          const data = JSON.parse(text)
+          if (data?.Message?.PositionReport) {
+            const r = data.Message.PositionReport
+            const mmsi = data.MetaData?.MMSI
+            addLog(`🚢 Navire: MMSI=${mmsi} lat=${r.Latitude?.toFixed(4)} lon=${r.Longitude?.toFixed(4)} sog=${r.Sog}`)
+            status.textContent = `🟢 LIVE — navires recus`
+          } else {
+            addLog(`📩 Autre message: ${e.data.substring(0, 100)}`)
+          }
+        } catch (err) {
+          addLog(`⚠️ Erreur parse: ${err.message}`)
+        }
+      }
+
+      ws.onerror = (e) => {
+        status.textContent = '🔴 Erreur'
+        addLog(`❌ ERREUR WebSocket: type=${e.type}`)
+      }
+
+      ws.onclose = (e) => {
+        status.textContent = `🔴 Ferme (code ${e.code})`
+        addLog(`🔴 FERME — code: ${e.code} | reason: "${e.reason}" | wasClean: ${e.wasClean}`)
+      }
+
+      setTimeout(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          addLog('⏱ 20s - fermeture test')
+          ws.close()
+        }
+      }, 20000)
+    }
+  </script>
+</body>
+</html>
