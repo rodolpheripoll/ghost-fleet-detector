@@ -53,6 +53,8 @@ def clean_data(data: dict) -> tuple[dict, dict]:
     ais       = data["ais"].copy()
     behaviors = data["behaviors"].copy()
     zones     = data["zones"].copy()
+    ships     = data.get("ships", pd.DataFrame()).copy()
+    alerts    = data.get("alerts", pd.DataFrame()).copy()
 
     total_rows = len(ais)
 
@@ -126,5 +128,6 @@ def clean_data(data: dict) -> tuple[dict, dict]:
         "rows_after_cleaning":    rows_after,
     }
 
-    cleaned = {"ais": ais, "behaviors": behaviors, "zones": zones}
+    cleaned = {"ais": ais, "behaviors": behaviors, "zones": zones,
+               "ships": ships, "alerts": alerts}
     return cleaned, quality_report

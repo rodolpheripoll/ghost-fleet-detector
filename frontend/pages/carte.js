@@ -33,7 +33,6 @@ export default function CartePage() {
   const ships = mode === 'live' ? liveShips : demoShips
   const error = mode === 'live' ? liveError  : demoError
 
-  // In LIVE mode: show overlay only while first connecting (not on reconnects)
   const showOverlay = mode === 'live'
     ? (liveStatus === 'idle' || liveStatus === 'connecting') && liveShips.length === 0
     : demoLoading
@@ -45,25 +44,25 @@ export default function CartePage() {
   return (
     <div className="flex flex-col h-[calc(100vh-80px)]">
       {/* Toolbar */}
-      <div className="bg-[#0f172a] border-b border-slate-700 px-4 py-2 flex items-center gap-4 flex-shrink-0">
+      <div className="bg-white border-b border-slate-200 px-4 py-2 flex items-center gap-4 flex-shrink-0">
         <input
           type="text"
-          placeholder="Filtrer par MMSI..."
+          placeholder="Rechercher par MMSI..."
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="bg-slate-800 border border-slate-600 text-slate-200 rounded px-3 py-1.5
-                     text-sm w-64 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5
+                     text-sm w-64 focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]"
         />
-        <span className="text-slate-400 text-xs">
+        <span className="text-[#64748b] text-xs">
           {filteredShips.length} navire{filteredShips.length !== 1 ? 's' : ''} affiché{filteredShips.length !== 1 ? 's' : ''}
         </span>
 
         {mode === 'live' && (
           <span className={`text-xs px-2 py-1 rounded-full border ${
-            liveStatus === 'live'         ? 'text-emerald-400 border-emerald-800 bg-emerald-900/30' :
-            liveStatus === 'reconnecting' ? 'text-amber-400 border-amber-800 bg-amber-900/30' :
-            liveStatus === 'error'        ? 'text-red-400 border-red-800 bg-red-900/30' :
-                                            'text-amber-400 border-amber-800 bg-amber-900/30'
+            liveStatus === 'live'         ? 'text-green-700 border-green-300 bg-green-50' :
+            liveStatus === 'reconnecting' ? 'text-amber-700 border-amber-300 bg-amber-50' :
+            liveStatus === 'error'        ? 'text-red-700 border-red-300 bg-red-50' :
+                                            'text-amber-700 border-amber-300 bg-amber-50'
           }`}>
             {liveStatus === 'live'         ? `LIVE — ${ships.length} navires` :
              liveStatus === 'reconnecting' ? 'Reconnexion...' :
@@ -71,18 +70,17 @@ export default function CartePage() {
           </span>
         )}
 
-        {error && <span className="text-red-400 text-xs">Erreur : {error}</span>}
+        {error && <span className="text-red-600 text-xs">Erreur : {error}</span>}
       </div>
 
-      {/* Map — always mounted so Leaflet is never destroyed on reconnect */}
+      {/* Map */}
       <div className="flex-1 relative">
         <FullMap ships={filteredShips} zones={zones} />
 
-        {/* Loading overlay — shown on top, does not unmount the map */}
         {showOverlay && (
-          <div className="absolute inset-0 flex items-center justify-center bg-[#0f172a] z-[999]">
-            <span className="text-slate-400 animate-pulse">
-              {mode === 'live' ? 'Connexion a aisstream.io...' : 'Chargement de la carte...'}
+          <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-[999]">
+            <span className="text-[#64748b] animate-pulse">
+              {mode === 'live' ? 'Connexion à aisstream.io...' : 'Chargement de la carte...'}
             </span>
           </div>
         )}

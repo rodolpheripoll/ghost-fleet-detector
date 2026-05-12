@@ -7,13 +7,14 @@ import ShipTable from '../components/ShipTable'
 
 const MapPreview = dynamic(() => import('../components/MapPreview'), { ssr: false })
 
-function ScoreBadge({ score }) {
-  const s = parseFloat(score) || 0
-  let cls = 'bg-emerald-900 text-emerald-300'
-  if (s >= 0.8) cls = 'bg-red-950 text-red-300'
-  else if (s >= 0.6) cls = 'bg-red-900 text-red-300'
-  else if (s >= 0.3) cls = 'bg-amber-900 text-amber-300'
-  return <span className={`px-2 py-0.5 rounded text-xs font-bold ${cls}`}>{s.toFixed(2)}</span>
+function RiskBadge({ value }) {
+  const v = value ?? 'Normal'
+  const cls =
+    v === 'Ghost Fleet' ? 'bg-[#ede9fe] text-[#7c3aed]' :
+    v === 'Critical'    ? 'bg-[#fee2e2] text-[#dc2626]' :
+    v === 'Suspect'     ? 'bg-[#fef3c7] text-[#d97706]' :
+                          'bg-[#dcfce7] text-[#16a34a]'
+  return <span className={`px-2 py-0.5 rounded text-xs font-semibold ${cls}`}>{v}</span>
 }
 
 export default function Dashboard() {
@@ -44,15 +45,15 @@ export default function Dashboard() {
   const loading = mode === 'live' ? liveStatus === 'connecting' : demoLoading
   const err     = mode === 'live' ? liveError : error
 
-  const suspicious = ships.filter(s => s.score > 0.3).length
-  const critical   = ships.filter(s => s.score > 0.6).length
-  const ghostFleet = ships.filter(s => s.score >= 0.8).length
-  const top10      = ships.slice(0, 10)
+  const suspicious = ships.filter(s => (s.score ?? 0) > 0.3).length
+  const critical   = ships.filter(s => (s.score ?? 0) > 0.6).length
+  const ghostFleet = ships.filter(s => (s.score ?? 0) >= 0.8).length
+  const top10      = [...ships].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10)
 
   const tableColumns = [
     { key: 'mmsi',       label: 'MMSI' },
-    { key: 'score',      label: 'Score',     render: v => <ScoreBadge score={v} /> },
-    { key: 'risk_level', label: 'Risque' },
+    { key: 'risk_level', label: 'Risque',    render: v => <RiskBadge value={v} /> },
+    { key: 'score',      label: 'Score',     render: v => (parseFloat(v) || 0).toFixed(2) },
     { key: 'latitude',   label: 'Lat',       render: v => v?.toFixed(4) ?? 'N/A' },
     { key: 'longitude',  label: 'Lon',       render: v => v?.toFixed(4) ?? 'N/A' },
     { key: 'speed',      label: 'Vitesse',   render: v => v != null ? `${v} kn` : 'N/A' },
@@ -62,58 +63,58 @@ export default function Dashboard() {
   return (
     <main className="max-w-7xl mx-auto px-4 py-8">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white">
+        <h1 className="text-3xl font-bold text-[#0f172a]">
           Ghost Fleet Detection — AIS Maritime Intelligence
         </h1>
-        <p className="text-slate-400 mt-1 text-sm">
+        <p className="text-[#64748b] mt-1 text-sm">
           {mode === 'live'
-            ? `Donnees temps reel — aisstream.io (${liveStatus === 'live' ? ships.length + ' navires' : liveStatus})`
-            : 'Donnees statiques — pipeline CSV'}
+            ? `Données temps réel — aisstream.io (${liveStatus === 'live' ? ships.length + ' navires' : liveStatus})`
+            : 'Données statiques — pipeline CSV Généralisation'}
         </p>
       </div>
 
       {err && (
-        <div className="bg-red-900/40 border border-red-700 text-red-300 rounded-lg px-4 py-3 mb-6 text-sm">
+        <div className="bg-red-50 border border-red-200 text-red-700 rounded-lg px-4 py-3 mb-6 text-sm">
           {err}
         </div>
       )}
 
       {loading ? (
-        <div className="text-slate-400 animate-pulse">
-          {mode === 'live' ? 'Connexion a aisstream.io...' : 'Chargement des donnees...'}
+        <div className="text-[#64748b] animate-pulse">
+          {mode === 'live' ? 'Connexion à aisstream.io...' : 'Chargement des données...'}
         </div>
       ) : (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <KPICard title="Navires totaux"  value={ships.length}     icon="🚢" color="text-blue-400"   subtitle="positions uniques MMSI" />
-            <KPICard title="Suspects"        value={suspicious}       icon="⚠️" color="text-amber-400"  subtitle="score > 0.3" />
-            <KPICard title="Critiques"       value={critical}         icon="🔴" color="text-red-400"    subtitle="score > 0.6" />
-            <KPICard title="Anomalies"       value={anomalies.length} icon="🔍" color="text-purple-400" subtitle="regles + Isolation Forest" />
+            <KPICard title="Navires totaux"  value={ships.length}     color="#0ea5e9" subtitle="positions uniques MMSI" />
+            <KPICard title="Suspects"        value={suspicious}       color="#d97706" subtitle="score > 0.3" />
+            <KPICard title="Critiques"       value={critical}         color="#dc2626" subtitle="score > 0.6" />
+            <KPICard title="Anomalies"       value={anomalies.length} color="#7c3aed" subtitle="règles + Isolation Forest" />
           </div>
 
           {ghostFleet > 0 && (
-            <div className="bg-red-950 border border-red-700 rounded-xl px-5 py-4 mb-8 flex items-center gap-3">
+            <div className="bg-[#fee2e2] border border-red-300 rounded-xl px-5 py-4 mb-8 flex items-center gap-3">
               <span className="text-2xl">🚨</span>
               <div>
-                <p className="text-red-300 font-bold">
-                  {ghostFleet} navire{ghostFleet > 1 ? 's' : ''} identifie{ghostFleet > 1 ? 's' : ''} comme flotte fantome (score ≥ 0.8)
+                <p className="text-[#dc2626] font-bold">
+                  {ghostFleet} navire{ghostFleet > 1 ? 's' : ''} identifié{ghostFleet > 1 ? 's' : ''} comme flotte fantôme (score ≥ 0.8)
                 </p>
-                <p className="text-red-400 text-sm">Action immediate requise</p>
+                <p className="text-red-500 text-sm">Action immédiate requise</p>
               </div>
             </div>
           )}
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-8 mb-8">
             <div>
-              <h2 className="text-lg font-semibold text-white mb-3">Top 10 Navires les Plus Suspects</h2>
+              <h2 className="text-lg font-semibold text-[#0f172a] mb-3">Top 10 Navires les Plus Suspects</h2>
               <ShipTable ships={top10} columns={tableColumns} />
             </div>
             <div>
-              <h2 className="text-lg font-semibold text-white mb-3">Apercu Cartographique</h2>
-              <div className="rounded-xl overflow-hidden border border-slate-700" style={{ height: 380 }}>
+              <h2 className="text-lg font-semibold text-[#0f172a] mb-3">Aperçu Cartographique</h2>
+              <div className="rounded-xl overflow-hidden border border-slate-200 shadow-sm" style={{ height: 380 }}>
                 {ships.length > 0
                   ? <MapPreview ships={ships} />
-                  : <div className="flex items-center justify-center h-full text-slate-500 bg-slate-800">Aucune position disponible</div>
+                  : <div className="flex items-center justify-center h-full text-[#64748b] bg-slate-50">Aucune position disponible</div>
                 }
               </div>
             </div>

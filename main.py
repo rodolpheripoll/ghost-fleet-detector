@@ -73,11 +73,21 @@ from pipeline.report_generator import generate_pdf_report
 def _serialize(df: pd.DataFrame) -> list[dict]:
     """Convert a DataFrame to a list of JSON-serialisable dicts for Supabase."""
     records = df.copy()
-    for col in records.select_dtypes(include=["datetime64[ns, UTC]",
-                                               "datetime64[ns]"]).columns:
-        records[col] = records[col].astype(str)
+    # Convert datetime columns to ISO strings; NaT → None
+    for col in records.columns:
+        if pd.api.types.is_datetime64_any_dtype(records[col]):
+            records[col] = records[col].apply(
+                lambda x: None if pd.isna(x) else x.isoformat()
+            )
+    # Replace all remaining NaN/NaT with None
     records = records.where(pd.notnull(records), None)
-    return records.to_dict("records")
+    # Final pass: ensure no 'NaT' strings remain
+    result = records.to_dict("records")
+    for row in result:
+        for k, v in row.items():
+            if v == "NaT" or v == "nan":
+                row[k] = None
+    return result
 
 
 def push_to_supabase(
@@ -148,8 +158,12 @@ if __name__ == "__main__":
     # 2. Clean
     clean, quality_report = clean_data(data)
 
-    # 3. Detect anomalies
-    anomalies = detect_anomalies(clean["ais"], clean["zones"])
+    # 3. Detect anomalies (rule + ML + pre-labeled behaviors/alerts)
+    anomalies = detect_anomalies(
+        clean["ais"], clean["zones"],
+        behaviors_df=clean.get("behaviors"),
+        alerts_df=clean.get("alerts"),
+    )
 
     # 4. Score ships
     scored = compute_scores(clean["ais"], anomalies, clean["zones"])

@@ -7,30 +7,21 @@ import ShipTable from '../components/ShipTable'
 const Plot = dynamic(() => import('react-plotly.js'), { ssr: false })
 
 const RISK_PALETTE = {
-  'Ghost Fleet': '#7f1d1d',
+  'Ghost Fleet': '#7c3aed',
   'Critical':    '#dc2626',
   'Suspect':     '#d97706',
-  'Normal':      '#6b7280',
-}
-
-function ScoreBadge({ score }) {
-  const s = parseFloat(score) || 0
-  let cls = 'bg-emerald-900 text-emerald-300'
-  if (s >= 0.8) cls = 'bg-red-950 text-red-300'
-  else if (s >= 0.6) cls = 'bg-red-900 text-red-300'
-  else if (s >= 0.3) cls = 'bg-amber-900 text-amber-300'
-  return <span className={`px-2 py-0.5 rounded text-xs font-bold ${cls}`}>{s.toFixed(2)}</span>
+  'Normal':      '#16a34a',
 }
 
 const CHART_LAYOUT = (title) => ({
-  title:         { text: title, font: { color: '#e2e8f0', size: 14 } },
-  paper_bgcolor: '#1e293b',
-  plot_bgcolor:  '#1e293b',
-  font:          { color: '#94a3b8' },
-  xaxis:         { gridcolor: '#334155', zerolinecolor: '#334155' },
-  yaxis:         { gridcolor: '#334155', zerolinecolor: '#334155' },
+  title:         { text: title, font: { color: '#0f172a', size: 14 } },
+  paper_bgcolor: '#ffffff',
+  plot_bgcolor:  '#f8fafc',
+  font:          { color: '#64748b' },
+  xaxis:         { gridcolor: '#e2e8f0', zerolinecolor: '#e2e8f0' },
+  yaxis:         { gridcolor: '#e2e8f0', zerolinecolor: '#e2e8f0' },
   margin:        { t: 40, b: 40, l: 50, r: 20 },
-  legend:        { bgcolor: '#0f172a', bordercolor: '#334155', borderwidth: 1 },
+  legend:        { bgcolor: '#ffffff', bordercolor: '#e2e8f0', borderwidth: 1 },
   autosize:      true,
 })
 
@@ -123,66 +114,66 @@ export default function AnalysePage() {
   const anomColumns = [
     { key: 'mmsi',        label: 'MMSI' },
     { key: 'type',        label: 'Type' },
-    { key: 'description', label: 'Description', render: v => <span className="text-xs text-slate-400">{v}</span> },
-    { key: 'confidence',  label: 'Confiance',   render: v => <span className={`text-xs font-bold ${parseFloat(v) >= 0.85 ? 'text-red-400' : 'text-amber-400'}`}>{(parseFloat(v ?? 0) * 100).toFixed(0)}%</span> },
-    { key: 'detected_by', label: 'Methode',     render: v => <span className={`px-2 py-0.5 rounded text-xs ${v === 'isolation_forest' ? 'bg-purple-900 text-purple-300' : v === 'both' ? 'bg-red-900 text-red-300' : 'bg-blue-900 text-blue-300'}`}>{v}</span> },
+    { key: 'description', label: 'Description', render: v => <span className="text-xs text-[#64748b]">{v}</span> },
+    { key: 'confidence',  label: 'Confiance',   render: v => <span className={`text-xs font-bold ${parseFloat(v) >= 0.85 ? 'text-[#dc2626]' : 'text-[#d97706]'}`}>{(parseFloat(v ?? 0) * 100).toFixed(0)}%</span> },
+    { key: 'detected_by', label: 'Méthode',     render: v => <span className={`px-2 py-0.5 rounded text-xs ${v === 'isolation_forest' ? 'bg-[#ede9fe] text-[#7c3aed]' : v === 'both' ? 'bg-[#fee2e2] text-[#dc2626]' : 'bg-[#dbeafe] text-[#1d4ed8]'}`}>{v}</span> },
     { key: 'timestamp',   label: 'Timestamp',   render: v => v ? new Date(v).toLocaleString('fr-FR') : 'N/A' },
   ]
 
   const CONF = { responsive: true }
 
   if (loading) return (
-    <main className="max-w-7xl mx-auto px-4 py-8 text-slate-400 animate-pulse">
-      {mode === 'live' ? 'Connexion a aisstream.io...' : 'Chargement des analyses...'}
+    <main className="max-w-7xl mx-auto px-4 py-8 text-[#64748b] animate-pulse">
+      {mode === 'live' ? 'Connexion à aisstream.io...' : 'Chargement des analyses...'}
     </main>
   )
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-white">Analyse ML — Isolation Forest</h1>
+        <h1 className="text-2xl font-bold text-[#0f172a]">Analyse ML — Isolation Forest</h1>
         {mode === 'live' && (
-          <span className="text-xs text-emerald-400 bg-emerald-900/40 border border-emerald-800 px-3 py-1 rounded-full">
-            Donnees temps reel — {ships.length} navires
+          <span className="text-xs text-green-700 bg-green-50 border border-green-200 px-3 py-1 rounded-full">
+            Données temps réel — {ships.length} navires
           </span>
         )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
-        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
           <Plot data={scatterTraces} layout={CHART_LAYOUT('Vitesse vs Score de suspicion')} config={CONF} style={{ width: '100%' }} />
         </div>
-        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
           <Plot data={barTrace} layout={CHART_LAYOUT('Anomalies par type')} config={CONF} style={{ width: '100%' }} />
         </div>
-        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-          <Plot data={lineTrace} layout={CHART_LAYOUT('Anomalies detectees par jour')} config={CONF} style={{ width: '100%' }} />
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+          <Plot data={lineTrace} layout={CHART_LAYOUT('Anomalies détectées par jour')} config={CONF} style={{ width: '100%' }} />
         </div>
-        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700">
-          <Plot data={pieTrace} layout={{ ...CHART_LAYOUT('Repartition par niveau de risque'), showlegend: true }} config={CONF} style={{ width: '100%' }} />
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
+          <Plot data={pieTrace} layout={{ ...CHART_LAYOUT('Répartition par niveau de risque'), showlegend: true }} config={CONF} style={{ width: '100%' }} />
         </div>
-        <div className="bg-slate-800 rounded-xl p-4 border border-slate-700 lg:col-span-2">
+        <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm lg:col-span-2">
           <Plot data={hbarTrace} layout={{ ...CHART_LAYOUT('Top 10 navires par score'), yaxis: { ...CHART_LAYOUT('').yaxis, autorange: 'reversed' } }} config={CONF} style={{ width: '100%' }} />
         </div>
       </div>
 
       {/* Methodology */}
-      <section className="bg-slate-800 border border-slate-700 rounded-xl p-6 mb-8">
-        <h2 className="text-lg font-semibold text-white mb-4">Methodologie de detection</h2>
-        <div className="space-y-4 text-sm text-slate-300">
+      <section className="bg-white border border-slate-200 rounded-xl p-6 mb-8 shadow-sm">
+        <h2 className="text-lg font-semibold text-[#0f172a] mb-4">Méthodologie de détection</h2>
+        <div className="space-y-4 text-sm text-[#0f172a]">
           <div>
-            <h3 className="text-blue-400 font-semibold mb-1">Isolation Forest (ML)</h3>
-            <p>L&apos;Isolation Forest isole les anomalies en partitionnant aleatoirement l&apos;espace des caracteristiques. Le parametre <code>contamination=0.05</code> reflète le taux estime de 5% de navires fantomes (source : Windward Maritime AI Annual Report 2022).</p>
+            <h3 className="text-[#0ea5e9] font-semibold mb-1">Isolation Forest (ML)</h3>
+            <p>L&apos;Isolation Forest isole les anomalies en partitionnant aléatoirement l&apos;espace des caractéristiques. Le paramètre <code className="bg-slate-100 px-1 rounded">contamination=0.05</code> reflète le taux estimé de 5% de navires fantômes (source : Windward Maritime AI Annual Report 2022).</p>
           </div>
           <div>
-            <h3 className="text-blue-400 font-semibold mb-1">Score composite</h3>
-            <pre className="bg-slate-900 rounded p-3 text-xs overflow-x-auto">{`score = 0.30×ais_off + 0.25×mmsi_spoof + 0.20×speed_anomaly + 0.15×position_jump + 0.10×critical_zone`}</pre>
+            <h3 className="text-[#0ea5e9] font-semibold mb-1">Score composite</h3>
+            <pre className="bg-slate-50 border border-slate-200 rounded p-3 text-xs overflow-x-auto">{`score = 0.30×ais_off + 0.25×mmsi_spoof + 0.20×speed_anomaly + 0.15×position_jump + 0.10×critical_zone`}</pre>
           </div>
           <div>
-            <h3 className="text-blue-400 font-semibold mb-1">Seuils</h3>
-            <ul className="text-xs text-slate-400 list-disc list-inside space-y-1">
+            <h3 className="text-[#0ea5e9] font-semibold mb-1">Seuils</h3>
+            <ul className="text-xs text-[#64748b] list-disc list-inside space-y-1">
               <li><b>Vitesse &gt; 25 kn</b> — max commercial IMO (Maersk Triple-E)</li>
-              <li><b>Saut &gt; 0.05°</b> (~5.5 km) — teleportation impossible</li>
+              <li><b>Saut &gt; 0.05°</b> (~5.5 km) — téléportation impossible</li>
               <li><b>AIS off &gt; 2h</b> — SOLAS Chap. V Reg. 19.2.4</li>
               <li><b>MMSI FAKE-</b> — non conforme ITU-R M.585</li>
             </ul>
@@ -193,14 +184,14 @@ export default function AnalysePage() {
       {/* Anomaly table */}
       <section>
         <div className="flex flex-wrap items-center gap-4 mb-4">
-          <h2 className="text-lg font-semibold text-white">Tableau des anomalies</h2>
+          <h2 className="text-lg font-semibold text-[#0f172a]">Tableau des anomalies</h2>
           <input type="text" placeholder="Filtrer par MMSI..." value={filter} onChange={e => setFilter(e.target.value)}
-            className="bg-slate-800 border border-slate-600 text-slate-200 rounded px-3 py-1.5 text-sm w-52 focus:outline-none focus:ring-1 focus:ring-blue-500" />
+            className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5 text-sm w-52 focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]" />
           <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
-            className="bg-slate-800 border border-slate-600 text-slate-200 rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+            className="bg-white border border-slate-300 text-[#0f172a] rounded px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#0ea5e9]">
             {anomTypes.map(t => <option key={t} value={t}>{t === 'all' ? 'Tous les types' : t}</option>)}
           </select>
-          <span className="text-slate-400 text-xs">{filteredAnom.length} anomalie(s)</span>
+          <span className="text-[#64748b] text-xs">{filteredAnom.length} anomalie(s)</span>
         </div>
         <ShipTable ships={filteredAnom} columns={anomColumns} />
       </section>

@@ -257,9 +257,48 @@ def _ml_detection(ais_df: pd.DataFrame) -> pd.DataFrame:
     return ais
 
 
-def detect_anomalies(ais_df: pd.DataFrame, zones_df: pd.DataFrame) -> pd.DataFrame:
+def _merge_provided_data(behaviors_df: pd.DataFrame, alerts_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Detect anomalies using both rule-based and Isolation Forest methods.
+    Convert pre-labeled behaviors and alerts into the standard anomaly format,
+    tagged detected_by='provided_data'.
+    """
+    records = []
+
+    if not behaviors_df.empty:
+        for _, row in behaviors_df.iterrows():
+            records.append({
+                "mmsi":        str(row.get("mmsi", "")),
+                "type":        str(row.get("type", "Unknown")),
+                "description": str(row.get("description", "")),
+                "timestamp":   row.get("timestamp", pd.NaT),
+                "confidence":  float(row.get("confidence", 0.7)),
+                "detected_by": "provided_data",
+            })
+
+    if not alerts_df.empty:
+        for _, row in alerts_df.iterrows():
+            records.append({
+                "mmsi":        str(row.get("mmsi", "")),
+                "type":        str(row.get("type", "Alert")),
+                "description": str(row.get("description", "")),
+                "timestamp":   row.get("timestamp", pd.NaT),
+                "confidence":  0.8 if str(row.get("severity", "")).lower() in ("high", "critical") else 0.5,
+                "detected_by": "provided_data",
+            })
+
+    return pd.DataFrame(records) if records else pd.DataFrame(
+        columns=["mmsi", "type", "description", "timestamp", "confidence", "detected_by"]
+    )
+
+
+def detect_anomalies(
+    ais_df: pd.DataFrame,
+    zones_df: pd.DataFrame,
+    behaviors_df: pd.DataFrame | None = None,
+    alerts_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """
+    Detect anomalies using rule-based, Isolation Forest, and pre-labeled data.
 
     Returns
     -------
@@ -272,7 +311,7 @@ def detect_anomalies(ais_df: pd.DataFrame, zones_df: pd.DataFrame) -> pd.DataFra
     print(f"  Rule-based anomalies found: {len(rule_df)}")
 
     print("[anomaly_detection] Running Isolation Forest ML detection...")
-    ml_ais = _ml_detection(ais_df)
+    ml_ais  = _ml_detection(ais_df)
     ml_hits = ml_ais[ml_ais["is_ml_anomaly"]].copy()
 
     ml_records = []
@@ -293,22 +332,33 @@ def detect_anomalies(ais_df: pd.DataFrame, zones_df: pd.DataFrame) -> pd.DataFra
     ml_df = pd.DataFrame(ml_records)
     print(f"  Isolation Forest anomalies found: {len(ml_df)}")
 
-    # Merge and tag entries detected by both methods
-    if rule_df.empty and ml_df.empty:
+    # ── Merge pre-labeled data from CSV files ─────────────────────────────────
+    provided_df = _merge_provided_data(
+        behaviors_df if behaviors_df is not None else pd.DataFrame(),
+        alerts_df    if alerts_df    is not None else pd.DataFrame(),
+    )
+    print(f"  Pre-labeled anomalies (behaviors + alerts): {len(provided_df)}")
+
+    frames = [df for df in [rule_df, ml_df, provided_df] if not df.empty]
+    if not frames:
         return pd.DataFrame(columns=["mmsi", "type", "description", "timestamp",
                                       "confidence", "detected_by"])
 
-    all_anomalies = pd.concat([rule_df, ml_df], ignore_index=True)
+    all_anomalies = pd.concat(frames, ignore_index=True)
 
-    # Tag MMSIs caught by both
+    # Tag MMSIs caught by both rule-based AND ML
     rule_mmsi = set(rule_df["mmsi"].unique()) if not rule_df.empty else set()
     ml_mmsi   = set(ml_df["mmsi"].unique())   if not ml_df.empty   else set()
     both      = rule_mmsi & ml_mmsi
-    all_anomalies.loc[all_anomalies["mmsi"].isin(both), "detected_by"] = "both"
+    all_anomalies.loc[
+        (all_anomalies["detected_by"].isin(["rule", "isolation_forest"])) &
+        all_anomalies["mmsi"].isin(both),
+        "detected_by"
+    ] = "both"
 
     total = len(all_anomalies)
     print(f"[anomaly_detection] Total anomalies: {total} "
-          f"({len(rule_df)} rule-based + {len(ml_df)} ML, "
-          f"{len(both)} MMSI caught by both)")
+          f"({len(rule_df)} rule + {len(ml_df)} ML + {len(provided_df)} provided, "
+          f"{len(both)} MMSI caught by rule+ML)")
 
     return all_anomalies.reset_index(drop=True)

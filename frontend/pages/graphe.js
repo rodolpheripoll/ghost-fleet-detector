@@ -110,7 +110,7 @@ export default function GraphePage() {
     }
 
     ctx.clearRect(0, 0, W, H)
-    ctx.fillStyle = '#1e293b'
+    ctx.fillStyle = '#f8fafc'
     ctx.fillRect(0, 0, W, H)
 
     edges.forEach(edge => {
@@ -124,8 +124,8 @@ export default function GraphePage() {
     Object.values(positions).forEach(node => {
       ctx.beginPath(); ctx.arc(node.x, node.y, node.r, 0, Math.PI*2)
       ctx.fillStyle = node.color; ctx.fill()
-      ctx.strokeStyle = '#0f172a'; ctx.lineWidth = 1.5; ctx.stroke()
-      ctx.fillStyle = '#e2e8f0'; ctx.font = `${Math.max(8, node.r*0.9)}px sans-serif`
+      ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5; ctx.stroke()
+      ctx.fillStyle = '#0f172a'; ctx.font = `${Math.max(8, node.r*0.9)}px sans-serif`
       ctx.textAlign = 'center'
       ctx.fillText(String(node.label).slice(0,12), node.x, node.y + node.r + 10)
     })
@@ -148,51 +148,51 @@ export default function GraphePage() {
     <div className="flex h-[calc(100vh-80px)]">
       <div className="flex-1 relative">
         {loading ? (
-          <div className="flex items-center justify-center h-full text-slate-400">
-            {mode === 'live' ? 'Connexion a aisstream.io...' : 'Chargement du graphe...'}
+          <div className="flex items-center justify-center h-full text-[#64748b]">
+            {mode === 'live' ? 'Connexion à aisstream.io...' : 'Chargement du graphe...'}
           </div>
         ) : error ? (
-          <div className="flex items-center justify-center h-full text-red-400">Erreur : {error}</div>
+          <div className="flex items-center justify-center h-full text-red-600">Erreur : {error}</div>
         ) : nodes.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-slate-500">
-            Aucun noeud. Lancez le pipeline Python d&apos;abord.
+          <div className="flex items-center justify-center h-full text-[#64748b]">
+            Aucun nœud. Lancez le pipeline Python d&apos;abord.
           </div>
         ) : (
-          <canvas ref={canvasRef} className="w-full h-full cursor-pointer" style={{ background: '#1e293b' }} />
+          <canvas ref={canvasRef} className="w-full h-full cursor-pointer" style={{ background: '#f8fafc' }} />
         )}
 
         {!loading && nodes.length > 0 && (
-          <div className="absolute bottom-4 left-4 bg-slate-900/90 border border-slate-700 rounded-lg p-3 text-xs text-slate-300">
-            <p className="font-bold text-white mb-1">Noeuds</p>
+          <div className="absolute bottom-4 left-4 bg-white border border-slate-200 rounded-lg p-3 text-xs text-[#0f172a] shadow-sm">
+            <p className="font-bold mb-1">Nœuds</p>
             <p><span style={{ color: '#dc2626' }}>●</span> Critique</p>
             <p><span style={{ color: '#d97706' }}>●</span> Suspect</p>
-            <p><span style={{ color: '#6b7280' }}>●</span> Normal</p>
+            <p><span style={{ color: '#16a34a' }}>●</span> Normal</p>
             <p><span style={{ color: '#3b82f6' }}>●</span> Zone</p>
             <p><span style={{ color: '#8b5cf6' }}>●</span> Comportement</p>
           </div>
         )}
       </div>
 
-      <div className="w-72 bg-slate-900 border-l border-slate-700 p-4 overflow-y-auto flex-shrink-0">
-        <h2 className="text-sm font-bold text-white mb-4 uppercase tracking-wide">
-          {selected ? 'Details du noeud' : 'Cliquez sur un noeud'}
+      <div className="w-72 bg-white border-l border-slate-200 p-4 overflow-y-auto flex-shrink-0">
+        <h2 className="text-sm font-bold text-[#0f172a] mb-4 uppercase tracking-wide">
+          {selected ? 'Détails du nœud' : 'Cliquez sur un nœud'}
         </h2>
         {selected ? (
-          <div className="space-y-2 text-sm text-slate-300">
-            <div className="bg-slate-800 rounded-lg p-3 space-y-1.5">
-              <p><span className="text-slate-500">ID :</span> <span className="font-mono text-xs">{selected.id}</span></p>
-              <p><span className="text-slate-500">Type :</span> {selected.type}</p>
-              <p><span className="text-slate-500">Score :</span> <span className={selected.score >= 0.6 ? 'text-red-400 font-bold' : selected.score >= 0.3 ? 'text-amber-400 font-bold' : 'text-emerald-400'}>{parseFloat(selected.score).toFixed(3)}</span></p>
-              <p><span className="text-slate-500">Risque :</span> {selected.risk_level}</p>
-              <p><span className="text-slate-500">Centralite :</span> {parseFloat(selected.centrality ?? 0).toFixed(4)}</p>
+          <div className="space-y-2 text-sm text-[#0f172a]">
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1.5">
+              <p><span className="text-[#64748b]">ID :</span> <span className="font-mono text-xs">{selected.id}</span></p>
+              <p><span className="text-[#64748b]">Type :</span> {selected.type}</p>
+              <p><span className="text-[#64748b]">Score :</span> <span className={selected.score >= 0.6 ? 'text-[#dc2626] font-bold' : selected.score >= 0.3 ? 'text-[#d97706] font-bold' : 'text-[#16a34a]'}>{parseFloat(selected.score).toFixed(3)}</span></p>
+              <p><span className="text-[#64748b]">Risque :</span> {selected.risk_level}</p>
+              <p><span className="text-[#64748b]">Centralité :</span> {parseFloat(selected.centrality ?? 0).toFixed(4)}</p>
             </div>
             <div>
-              <p className="text-slate-500 text-xs font-medium uppercase mt-3 mb-2">Relations</p>
+              <p className="text-[#64748b] text-xs font-medium uppercase mt-3 mb-2">Relations</p>
               {edges.filter(e => e.source === selected.id || e.target === selected.id).slice(0,15).map((e, i) => (
-                <div key={i} className="text-xs bg-slate-800 rounded px-2 py-1 mb-1 flex items-center gap-1">
-                  <span className="font-mono">{e.source === selected.id ? e.target : e.source}</span>
+                <div key={i} className="text-xs bg-slate-50 border border-slate-100 rounded px-2 py-1 mb-1 flex items-center gap-1">
+                  <span className="font-mono text-[#0f172a]">{e.source === selected.id ? e.target : e.source}</span>
                   <span className="ml-auto px-1.5 py-0.5 rounded text-[10px]"
-                    style={{ background: (EDGE_COLORS[e.label]||'#6b7280')+'33', color: EDGE_COLORS[e.label]||'#6b7280' }}>
+                    style={{ background: (EDGE_COLORS[e.label]||'#64748b')+'22', color: EDGE_COLORS[e.label]||'#64748b' }}>
                     {e.label}
                   </span>
                 </div>
@@ -200,10 +200,10 @@ export default function GraphePage() {
             </div>
           </div>
         ) : (
-          <div className="text-slate-500 text-sm">
-            <p>Selectionnez un noeud pour voir ses details.</p>
-            <p className="mt-4 text-xs"><b className="text-slate-400">{nodes.length}</b> noeuds · <b className="text-slate-400">{edges.length}</b> aretes</p>
-            {mode === 'live' && <p className="mt-2 text-xs text-emerald-500">Mode LIVE — navires temps reel</p>}
+          <div className="text-[#64748b] text-sm">
+            <p>Sélectionnez un nœud pour voir ses détails.</p>
+            <p className="mt-4 text-xs"><b className="text-[#0f172a]">{nodes.length}</b> nœuds · <b className="text-[#0f172a]">{edges.length}</b> arêtes</p>
+            {mode === 'live' && <p className="mt-2 text-xs text-green-600">Mode LIVE — navires temps réel</p>}
           </div>
         )}
       </div>

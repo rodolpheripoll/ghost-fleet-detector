@@ -28,7 +28,7 @@ class GhostFleetPDF(FPDF):
         self.set_font("Helvetica", "B", 10)
         self.set_fill_color(15, 23, 42)   # Navy #0f172a
         self.set_text_color(255, 255, 255)
-        self.cell(0, 10, "  Ghost Fleet Detection — Rapport Confidentiel",
+        self.cell(0, 10, "  Ghost Fleet Detection - Rapport Confidentiel",
                   new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
         self.ln(4)
         self.set_text_color(0, 0, 0)
@@ -43,23 +43,31 @@ class GhostFleetPDF(FPDF):
         self.set_font("Helvetica", "B", 13)
         self.set_fill_color(30, 41, 59)
         self.set_text_color(255, 255, 255)
-        self.cell(0, 9, f"  {title}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
+        self.cell(0, 9, f"  {_safe_str(title)}", new_x=XPos.LMARGIN, new_y=YPos.NEXT, fill=True)
         self.ln(3)
         self.set_text_color(0, 0, 0)
 
     def kpi_row(self, label: str, value, color=(0, 0, 0)):
         self.set_font("Helvetica", "", 11)
-        self.cell(90, 8, label)
+        self.cell(90, 8, _safe_str(label))
         self.set_font("Helvetica", "B", 11)
         self.set_text_color(*color)
-        self.cell(0, 8, str(value), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        self.cell(0, 8, _safe_str(value), new_x=XPos.LMARGIN, new_y=YPos.NEXT)
         self.set_text_color(0, 0, 0)
 
 
 def _safe_str(v) -> str:
+    """Convert value to a string safe for fpdf2 Helvetica (latin-1 only)."""
     if pd.isna(v):
         return "N/A"
-    return str(v)
+    s = str(v)
+    # Replace common Unicode punctuation with ASCII equivalents
+    s = s.replace('\u2014', '-').replace('\u2013', '-').replace('\u2019', "'")
+    s = s.replace('\u201c', '"').replace('\u201d', '"').replace('\u00e9', 'e')
+    s = s.replace('\u00e8', 'e').replace('\u00ea', 'e').replace('\u00e0', 'a')
+    s = s.replace('\u00f4', 'o').replace('\u00fb', 'u').replace('\u00ee', 'i')
+    # Strip any remaining non-latin-1 chars
+    return s.encode('latin-1', errors='replace').decode('latin-1')
 
 
 def generate_pdf_report(
@@ -191,9 +199,9 @@ def generate_pdf_report(
             pdf.set_text_color(r, g, b)
             pdf.cell(col_w[1], 6, f"{row['score']:.2f}", border=1, fill=True)
             pdf.set_text_color(0, 0, 0)
-            pdf.cell(col_w[2], 6, risk,    border=1, fill=True)
-            pdf.cell(col_w[3], 6, pos_str, border=1, fill=True)
-            pdf.cell(col_w[4], 6, anom_str, border=1, fill=True)
+            pdf.cell(col_w[2], 6, _safe_str(risk),     border=1, fill=True)
+            pdf.cell(col_w[3], 6, _safe_str(pos_str),  border=1, fill=True)
+            pdf.cell(col_w[4], 6, _safe_str(anom_str), border=1, fill=True)
             pdf.ln()
 
     # ════════════════════════════════════════════════════════════════════════
@@ -216,9 +224,9 @@ def generate_pdf_report(
         pct = f"{100 * cnt / total_anom:.1f}%" if total_anom > 0 else "0%"
         pdf.set_font("Helvetica", "", 9)
         pdf.set_fill_color(250, 250, 250)
-        pdf.cell(80, 6, atype,  border=1, fill=True)
-        pdf.cell(30, 6, str(cnt), border=1, fill=True)
-        pdf.cell(40, 6, pct,    border=1, fill=True)
+        pdf.cell(80, 6, _safe_str(atype), border=1, fill=True)
+        pdf.cell(30, 6, _safe_str(cnt),   border=1, fill=True)
+        pdf.cell(40, 6, _safe_str(pct),   border=1, fill=True)
         pdf.ln()
 
     pdf.ln(6)
@@ -239,8 +247,8 @@ def generate_pdf_report(
     for method, cnt in methods.items():
         pdf.set_font("Helvetica", "", 9)
         pdf.set_fill_color(250, 250, 250)
-        pdf.cell(80, 6, method,  border=1, fill=True)
-        pdf.cell(30, 6, str(cnt), border=1, fill=True)
+        pdf.cell(80, 6, _safe_str(method), border=1, fill=True)
+        pdf.cell(30, 6, _safe_str(cnt),    border=1, fill=True)
         pdf.ln()
 
     pdf.output(REPORT_PATH)

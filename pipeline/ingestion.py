@@ -19,11 +19,22 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Expected file paths (relative to project root)
-DATA_DIR       = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
+# Expected file paths — look for data in two places:
+#  1. <project_root>/data/  (symlink or copy)
+#  2. The hackathon repo's Généralisation folder (absolute fallback)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_LOCAL_DATA   = os.path.join(_PROJECT_ROOT, "data")
+_HACKATHON_DATA = os.path.join(
+    _PROJECT_ROOT, "..", "HackathonAlbert2026-main",
+    "SujetsHackathon2026", "Sujet4", "Généralisation"
+)
+DATA_DIR = _LOCAL_DATA if os.path.isdir(_LOCAL_DATA) else os.path.normpath(_HACKATHON_DATA)
+
 AIS_FILE       = os.path.join(DATA_DIR, "ais_data_large.csv")
 BEHAVIORS_FILE = os.path.join(DATA_DIR, "suspicious_behaviors_large.csv")
 ZONES_FILE     = os.path.join(DATA_DIR, "risk_zones_large.csv")
+SHIPS_FILE     = os.path.join(DATA_DIR, "ships_large.csv")
+ALERTS_FILE    = os.path.join(DATA_DIR, "alerts_large.csv")
 
 
 def _parse_timestamps(df: pd.DataFrame, col: str) -> pd.DataFrame:
@@ -110,20 +121,24 @@ def _run_aisstream(api_key: str, limit: int = 500) -> pd.DataFrame:
 def load_data() -> dict:
     """
     Load all data sources and return a dict with keys:
-        ais       -> pd.DataFrame
-        behaviors -> pd.DataFrame
-        zones     -> pd.DataFrame
+        ais       -> pd.DataFrame  (AIS positions)
+        behaviors -> pd.DataFrame  (suspicious_behaviors_large)
+        zones     -> pd.DataFrame  (risk_zones_large)
+        ships     -> pd.DataFrame  (ships_large metadata, may be empty)
+        alerts    -> pd.DataFrame  (alerts_large, may be empty)
 
     All timestamps are UTC-aware. All MMSI columns are cast to str.
     If AISSTREAM_API_KEY is set in .env, live positions are appended to ais.
     Source for live data: aisstream.io free WebSocket AIS stream.
     """
+    print(f"[ingestion] Data directory: {DATA_DIR}")
     print("[ingestion] Loading CSV files...")
 
     # ── AIS data ──────────────────────────────────────────────────────────────
     ais = pd.read_csv(AIS_FILE, dtype={"mmsi": str}, parse_dates=["timestamp"])
     ais = _parse_timestamps(ais, "timestamp")
     ais["mmsi"] = ais["mmsi"].astype(str).str.strip()
+    print(f"  AIS: {ais.shape} | columns: {list(ais.columns)}")
 
     # ── Optional live AIS data from aisstream.io ──────────────────────────────
     api_key = os.getenv("AISSTREAM_API_KEY", "").strip()
@@ -142,11 +157,34 @@ def load_data() -> dict:
     behaviors = pd.read_csv(BEHAVIORS_FILE, dtype={"mmsi": str}, parse_dates=["timestamp"])
     behaviors = _parse_timestamps(behaviors, "timestamp")
     behaviors["mmsi"] = behaviors["mmsi"].astype(str).str.strip()
+    print(f"  Behaviors: {behaviors.shape} | columns: {list(behaviors.columns)}")
 
     # ── Risk zones ────────────────────────────────────────────────────────────
     zones = pd.read_csv(ZONES_FILE)
+    print(f"  Zones: {zones.shape} | columns: {list(zones.columns)}")
+
+    # ── Ships metadata (optional enrichment) ─────────────────────────────────
+    ships = pd.DataFrame()
+    if os.path.exists(SHIPS_FILE):
+        ships = pd.read_csv(SHIPS_FILE, dtype={"mmsi": str})
+        ships["mmsi"] = ships["mmsi"].astype(str).str.strip()
+        print(f"  Ships: {ships.shape} | columns: {list(ships.columns)}")
+    else:
+        print("  Ships file not found — skipping enrichment.")
+
+    # ── Alerts (optional) ────────────────────────────────────────────────────
+    alerts = pd.DataFrame()
+    if os.path.exists(ALERTS_FILE):
+        alerts = pd.read_csv(ALERTS_FILE, dtype={"mmsi": str}, parse_dates=["timestamp"])
+        alerts = _parse_timestamps(alerts, "timestamp")
+        alerts["mmsi"] = alerts["mmsi"].astype(str).str.strip()
+        print(f"  Alerts: {alerts.shape} | columns: {list(alerts.columns)}")
+    else:
+        print("  Alerts file not found — skipping.")
 
     print(f"[ingestion] Loaded: {len(ais)} AIS rows | "
-          f"{len(behaviors)} behaviors | {len(zones)} zones")
+          f"{len(behaviors)} behaviors | {len(zones)} zones | "
+          f"{len(ships)} ships metadata | {len(alerts)} alerts")
 
-    return {"ais": ais, "behaviors": behaviors, "zones": zones}
+    return {"ais": ais, "behaviors": behaviors, "zones": zones,
+            "ships": ships, "alerts": alerts}
