@@ -25,7 +25,7 @@ load_dotenv()
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _LOCAL_DATA   = os.path.join(_PROJECT_ROOT, "data")
 _HACKATHON_DATA = os.path.join(
-    _PROJECT_ROOT, "..", "HackathonAlbert2026-main",
+    _PROJECT_ROOT, "..", "corection_codex", "HackathonAlbert2026-main",
     "SujetsHackathon2026", "Sujet4", "Généralisation"
 )
 DATA_DIR = _LOCAL_DATA if os.path.isdir(_LOCAL_DATA) else os.path.normpath(_HACKATHON_DATA)

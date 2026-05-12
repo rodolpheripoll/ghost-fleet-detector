@@ -72,7 +72,8 @@ def compute_scores(
 
     Algorithm
     ---------
-    1. For each MMSI sum: weight_i * confidence_i across all anomaly instances.
+    1. For each MMSI, take the MAX confidence per anomaly type (so 10 speed
+       anomalies only count once), then sum: weight_i * max_confidence_i.
     2. Apply a 5% bonus from ships_large prior_risk_score where available:
          final = clip(computed + 0.05 * prior_risk_score, 0, 1)
        The prior is intentionally weak so our computed score takes precedence.
@@ -92,14 +93,21 @@ def compute_scores(
         return scored
 
     # ── Per-MMSI computed score ───────────────────────────────────────────────
+    # Take max confidence per (mmsi, type) so repeated detections of the same
+    # anomaly type don't inflate the score. Each type counts at most once.
     ship_scores: dict[str, float] = {}
 
-    for mmsi_val, group in anomalies_df.groupby("mmsi"):
-        total = 0.0
-        for _, row in group.iterrows():
-            weight     = WEIGHTS.get(row["type"], 0.05)
-            confidence = float(row.get("confidence", 0.5))
-            total     += weight * confidence
+    anom = anomalies_df.copy()
+    anom["mmsi"] = anom["mmsi"].astype(str)
+    anom["confidence"] = pd.to_numeric(anom["confidence"], errors="coerce").fillna(0.5)
+
+    best = anom.groupby(["mmsi", "type"])["confidence"].max().reset_index()
+
+    for mmsi_val, group in best.groupby("mmsi"):
+        total = sum(
+            WEIGHTS.get(row["type"], 0.05) * row["confidence"]
+            for _, row in group.iterrows()
+        )
         ship_scores[str(mmsi_val)] = float(np.clip(total, 0.0, 1.0))
 
     # ── Prior risk score from ships_large registry ────────────────────────────
