@@ -86,7 +86,7 @@ export default function ZonesPage() {
 
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-[26px] font-bold text-[#1e3a5f]">Analyse des Zones à Risque — Q9</h1>
+        <h1 className="text-[26px] font-bold text-[#1e3a5f]">Analyse des Zones à Risque</h1>
         <p className="text-[#64748b] text-sm mt-1">
           Statistiques par zone géographique : navires détectés, comportements suspects, navires critiques
         </p>
