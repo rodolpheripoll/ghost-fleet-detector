@@ -1,26 +1,25 @@
 /**
- * KPICard — light theme
- * Props:
- *   title    {string}  — label above the value
- *   value    {string|number}
- *   color    {string}  — hex color for the left border and number
- *   subtitle {string}  — small descriptive text below the value
+ * KPICard — matches the HTML design system exactly.
+ * Props: title, icon (JSX), value, delta, deltaGood (bool), gradient ('default'|'blue'), children
  */
-export default function KPICard({ title, value, color = '#0ea5e9', subtitle }) {
+export default function KPICard({ title, icon, value, delta, deltaGood = true, gradient = 'default', children }) {
   return (
-    <div
-      className="bg-white rounded-xl p-5 flex flex-col gap-2 shadow-sm border border-slate-200 hover:shadow-md transition-shadow"
-      style={{ borderLeft: `4px solid ${color}` }}
-    >
-      <div className="text-[#64748b] text-sm font-medium uppercase tracking-wide">
-        {title}
+    <div className={`card p-5 ${gradient === 'blue' ? 'kpi-grad-blue' : 'kpi-grad'}`}>
+      <div className="flex items-center justify-between">
+        <div className="text-[12px] font-semibold tracking-wide uppercase" style={{ color: 'var(--muted)' }}>{title}</div>
+        {icon && (
+          <div className="w-8 h-8 rounded-lg bg-white ring-soft flex items-center justify-center">
+            {icon}
+          </div>
+        )}
       </div>
-      <div className="text-4xl font-bold" style={{ color }}>
-        {value ?? '—'}
+      <div className="mt-2 flex items-end gap-3">
+        <div className="text-[36px] font-bold tracking-tight leading-none">{value ?? '—'}</div>
+        {delta && (
+          <span className={`chip mb-1 ${deltaGood ? 'risk-normal' : 'risk-suspect'}`}>{delta}</span>
+        )}
       </div>
-      {subtitle && (
-        <div className="text-[#64748b] text-xs">{subtitle}</div>
-      )}
+      {children}
     </div>
   )
 }

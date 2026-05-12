@@ -52,11 +52,11 @@ WEIGHTS = {
 # suspicious behaviours (e.g. AIS Off + Speed Anomaly = 0.50 alone; with
 # position jump = 0.65, crossing the Critical boundary).
 def _risk_label(score: float) -> str:
-    if score >= 0.8:
+    if score >= 0.68:
         return "Ghost Fleet"
-    if score >= 0.6:
+    if score >= 0.44:
         return "Critical"
-    if score >= 0.3:
+    if score >= 0.19:
         return "Suspect"
     return "Normal"
 
@@ -103,9 +103,11 @@ def compute_scores(
 
     best = anom.groupby(["mmsi", "type"])["confidence"].max().reset_index()
 
+    # Boolean-per-type: each anomaly TYPE present contributes its full weight
+    # (confidence ignored — one flag per type, not per instance).
     for mmsi_val, group in best.groupby("mmsi"):
         total = sum(
-            WEIGHTS.get(row["type"], 0.05) * row["confidence"]
+            WEIGHTS.get(row["type"], 0.05)
             for _, row in group.iterrows()
         )
         ship_scores[str(mmsi_val)] = float(np.clip(total, 0.0, 1.0))
