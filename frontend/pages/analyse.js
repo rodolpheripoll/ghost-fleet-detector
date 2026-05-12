@@ -152,25 +152,6 @@ export default function AnalysePage() {
     }]
   }, [demoShips])
 
-  // Co-occurrence matrix
-  const coOccurrenceData = useMemo(() => {
-    const anomByMmsi = {}
-    anomalies.forEach(a => {
-      if (!anomByMmsi[a.mmsi]) anomByMmsi[a.mmsi] = new Set()
-      anomByMmsi[a.mmsi].add(a.type)
-    })
-    const types = ANOM_TYPES.filter(t => typeCounts[t])
-    const matrix = types.map(ti =>
-      types.map(tj => {
-        if (ti === tj) return 0
-        return Object.values(anomByMmsi).filter(s => s.has(ti) && s.has(tj)).length
-      })
-    )
-    return [{ type: 'heatmap', x: types, y: types, z: matrix,
-      colorscale: 'Blues',
-      hovertemplate: '%{y} ∩ %{x}<br>%{z} navires<extra></extra>' }]
-  }, [anomalies, typeCounts])
-
   const top10demo = [...demoShips].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 10)
   const hbarTrace = [{
     type: 'bar', orientation: 'h',
@@ -360,18 +341,12 @@ export default function AnalysePage() {
             </div>
           </div>
 
-          {/* Row 4: top 10 ships + co-occurrence */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+          {/* Row 4: top 10 ships */}
+          <div className="mb-8">
             <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
               <Plot data={hbarTrace}
                 layout={{ ...CHART_LAYOUT('Top 10 navires par score'),
                   yaxis: { ...CHART_LAYOUT('').yaxis, autorange: 'reversed' } }}
-                config={CONF} style={{ width: '100%' }} />
-            </div>
-            <div className="bg-white rounded-[14px] p-4 border border-[#e5ebf2] shadow-card">
-              <Plot data={coOccurrenceData}
-                layout={{ ...CHART_LAYOUT('Co-occurrence des types d\'anomalie'),
-                  xaxis: { ...CHART_LAYOUT('').xaxis, tickangle: -30 } }}
                 config={CONF} style={{ width: '100%' }} />
             </div>
           </div>
