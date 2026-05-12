@@ -10,6 +10,7 @@ const LINKS = [
   { href: '/analyse',  label: 'Analyse ML', graphOnly: false },
   { href: '/zones',    label: 'Zones',      graphOnly: false },
   { href: '/temporal', label: 'Temporel',   graphOnly: false },
+  { href: '/graphe',   label: 'Graphe',     graphOnly: true  },
   { href: '/groupes',  label: 'Groupes',    graphOnly: true  },
   { href: '/convois',  label: 'Convois',    graphOnly: true  },
   { href: '/rapport',  label: 'Rapport',    graphOnly: false },
