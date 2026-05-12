@@ -182,6 +182,7 @@ if __name__ == "__main__":
         clean.get("alerts",    pd.DataFrame()),
         clean.get("behaviors", pd.DataFrame()),
         clean["zones"],
+        ships_df=clean.get("ships"),
     )
 
     # ── PUSH TO SUPABASE ──────────────────────────────────────────────────────
