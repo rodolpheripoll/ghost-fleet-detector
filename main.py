@@ -166,7 +166,7 @@ if __name__ == "__main__":
     )
 
     # 4. Score ships
-    scored = compute_scores(clean["ais"], anomalies, clean["zones"])
+    scored = compute_scores(clean["ais"], anomalies, clean["zones"], ships_df=clean.get("ships"))
 
     # 5. Build knowledge graph
     graph, nodes, edges = build_graph(scored, anomalies, clean["zones"])

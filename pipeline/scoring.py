@@ -15,23 +15,35 @@ import numpy as np
 #  MMSI Spoofing (0.25) — identity fraud; impossible to legally track
 #    the vessel; grounds for immediate flag-state reporting (IMO Circ.289).
 #
+#  Name Change (0.18) — ships changing their registered name mid-voyage to
+#    escape sanctions blacklists. Second most common evasion technique after
+#    AIS shutdown. Source: UN Panel of Experts on North Korea, Report S/2023/171.
+#
 #  Speed Anomaly (0.20) — physically impossible speed proves deliberate
 #    data manipulation of the AIS transponder.
 #
-#  Position Jump (0.15) — fake GPS coordinates; lower weight than speed
+#  Fake Position (0.15) — fake GPS coordinates; lower weight than speed
 #    because it could, in rare cases, be a legitimate sensor glitch.
 #
-#  Critical Zone (0.10) — contextual risk factor based on geographic
-#    location rather than observed vessel behaviour; lowest individual weight.
+#  Zone Crossing / Zone Violation (0.10) — contextual risk factor based on
+#    geographic location. Both names refer to the same behaviour; "Zone Crossing"
+#    is produced by the rule engine, "Zone Violation" comes from the CSV files.
+#
+#  ML Anomaly (0.12) — Isolation Forest score; confidence is the raw anomaly
+#    score clipped to [0, 1].
+#
+#  Course Anomaly (0.08) — physically unrealistic heading change for large
+#    commercial vessels (IMO COLREGS Rule 8).
 
 WEIGHTS = {
-    "AIS Disabled":  0.30,
-    "MMSI Spoofing": 0.25,
-    "Speed Anomaly": 0.20,
-    "Fake Position": 0.15,
-    "Zone Crossing": 0.10,
-    # ML-detected anomalies contribute via their confidence score
-    "ML Anomaly":    0.12,
+    "AIS Disabled":   0.30,
+    "MMSI Spoofing":  0.25,
+    "Speed Anomaly":  0.20,
+    "Name Change":    0.18,   # UN Panel of Experts on North Korea, S/2023/171
+    "Fake Position":  0.15,
+    "Zone Crossing":  0.10,   # produced by the rule engine
+    "Zone Violation": 0.10,   # same behaviour, name used in CSV files
+    "ML Anomaly":     0.12,
     "Course Anomaly": 0.08,
 }
 
@@ -53,35 +65,33 @@ def compute_scores(
     ais_df: pd.DataFrame,
     anomalies_df: pd.DataFrame,
     zones_df: pd.DataFrame,
+    ships_df: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Compute a composite suspicion score [0, 1] per ship.
 
     Algorithm
     ---------
-    For each MMSI we collect all flagged anomaly types, look up their weight,
-    apply the confidence as a multiplier, sum the weighted contributions, and
-    clip to [0, 1].  The score formula is:
-
-        score = clip(sum(weight_i * confidence_i  for anomaly_i of ship), 0, 1)
-
-    This means a ship must accumulate multiple anomalies to cross the 0.6
-    "Critical" threshold, preventing false positives from single-event noise.
+    1. For each MMSI sum: weight_i * confidence_i across all anomaly instances.
+    2. Apply a 5% bonus from ships_large prior_risk_score where available:
+         final = clip(computed + 0.05 * prior_risk_score, 0, 1)
+       The prior is intentionally weak so our computed score takes precedence.
+       Source: ships_large.csv column risk_score (pre-existing registry flag).
 
     Returns
     -------
-    ais_df enriched with columns: score, risk_level
-    (one row per AIS position; the score is replicated from the per-ship value)
+    ais_df enriched with columns: score, risk_level, prior_risk_score
     """
     print("[scoring] Computing per-ship suspicion scores...")
 
     if anomalies_df.empty:
         scored = ais_df.copy()
-        scored["score"]     = 0.0
-        scored["risk_level"] = "Normal"
+        scored["score"]           = 0.0
+        scored["risk_level"]      = "Normal"
+        scored["prior_risk_score"] = 0.0
         return scored
 
-    # ── Per-MMSI score ────────────────────────────────────────────────────────
+    # ── Per-MMSI computed score ───────────────────────────────────────────────
     ship_scores: dict[str, float] = {}
 
     for mmsi_val, group in anomalies_df.groupby("mmsi"):
@@ -92,11 +102,33 @@ def compute_scores(
             total     += weight * confidence
         ship_scores[str(mmsi_val)] = float(np.clip(total, 0.0, 1.0))
 
+    # ── Prior risk score from ships_large registry ────────────────────────────
+    # prior_risk_score: pre-existing risk score from ships registry.
+    # Weight 0.05 — used as a weak prior; our computed score takes precedence.
+    prior_scores: dict[str, float] = {}
+    if ships_df is not None and not ships_df.empty and "risk_score" in ships_df.columns:
+        ships_df = ships_df.copy()
+        ships_df["mmsi"] = ships_df["mmsi"].astype(str).str.strip()
+        prior_scores = (
+            ships_df.set_index("mmsi")["risk_score"]
+            .apply(lambda x: float(x) if pd.notna(x) else 0.0)
+            .to_dict()
+        )
+        print(f"  [scoring] Prior risk scores loaded for {len(prior_scores)} ships from registry.")
+    else:
+        print("  [scoring] No ships registry provided — prior_risk_score = 0 for all ships.")
+
     # ── Annotate AIS DataFrame ────────────────────────────────────────────────
     scored = ais_df.copy()
-    scored["mmsi"]      = scored["mmsi"].astype(str)
-    scored["score"]     = scored["mmsi"].map(ship_scores).fillna(0.0)
-    scored["risk_level"] = scored["score"].apply(_risk_label)
+    scored["mmsi"] = scored["mmsi"].astype(str)
+
+    computed         = scored["mmsi"].map(ship_scores).fillna(0.0)
+    prior            = scored["mmsi"].map(prior_scores).fillna(0.0)
+    final            = np.clip(computed + 0.05 * prior, 0.0, 1.0)
+
+    scored["prior_risk_score"] = prior.round(4)
+    scored["score"]            = final.round(4)
+    scored["risk_level"]       = scored["score"].apply(_risk_label)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     level_counts = scored.drop_duplicates("mmsi")["risk_level"].value_counts()
